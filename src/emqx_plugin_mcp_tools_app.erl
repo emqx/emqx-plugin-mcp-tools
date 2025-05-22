@@ -31,13 +31,11 @@
 
 start(_StartType, _StartArgs) ->
     {ok, Sup} = emqx_plugin_mcp_tools_sup:start_link(),
-    emqx_plugin_mcp_tools:hook(),
-    emqx_ctl:register_command(emqx_plugin_mcp_tools, {emqx_plugin_mcp_tools_cli, cmd}),
+    emqx_ctl:register_command(emqx_mcp_tools, {emqx_plugin_mcp_tools_cli, cmd}),
     {ok, Sup}.
 
 stop(_State) ->
-    emqx_ctl:unregister_command(emqx_plugin_mcp_tools),
-    emqx_plugin_mcp_tools:unhook().
+    emqx_ctl:unregister_command(emqx_mcp_tools).
 
 on_config_changed(OldConfig, NewConfig) ->
     emqx_plugin_mcp_tools:on_config_changed(OldConfig, NewConfig).

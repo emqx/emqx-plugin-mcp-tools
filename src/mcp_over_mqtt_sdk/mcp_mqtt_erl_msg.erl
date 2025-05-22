@@ -35,15 +35,24 @@
 -export([decode_rpc_msg/1, topic_type_of_rpc_msg/1, get_topic/2]).
 
 -export([
-    send_server_online_message/3,
-    send_server_offline_message/1,
-    publish_mcp_server_message/5
+    send_server_online_message/5,
+    send_server_offline_message/3,
+    publish_mcp_server_message/7
 ]).
 
 -export([gen_mqtt_client_id/0]).
 
 -export([get_mcp_component_type_from_mqtt_props/1,
          get_mcp_client_id_from_mqtt_props/1]).
+
+-type topic_type() :: server_control
+                     | server_capability_list_changed
+                     | server_resources_updated
+                     | server_presence
+                     | client_presence
+                     | client_capability_list_changed
+                     | rpc.
+-type flags() :: #{retain => boolean(), qos => 0..2}.
 
 %%==============================================================================
 %% MCP Requests/Responses/Notifications
@@ -176,38 +185,37 @@ get_topic(client_capability_list_changed, #{mcp_clientid := McpClientId}) ->
 get_topic(rpc, #{mcp_clientid := McpClientId, server_name := ServerName}) ->
     <<"$mcp-rpc-endpoint/", McpClientId/binary, "/", ServerName/binary>>.
 
-send_server_online_message(ServerName, ServerDesc, ServerMeta) ->
+send_server_online_message(MqttClient, ServerId, ServerName, ServerDesc, ServerMeta) ->
     Payload = json_rpc_notification(<<"notifications/server/online">>, #{
         <<"server_name">> => ServerName,
         <<"description">> => ServerDesc,
         <<"meta">> => ServerMeta
     }),
-    publish_mcp_server_message(ServerName, undefined, server_presence, #{}, Payload).
+    publish_mcp_server_message(MqttClient, ServerId, ServerName, undefined, server_presence,
+        #{retain => true}, Payload).
 
-send_server_offline_message(ServerName) ->
-    %% No payload for offline message
-    Payload = <<>>,
-    publish_mcp_server_message(ServerName, undefined, server_presence, #{}, Payload).
+send_server_offline_message(MqttClient, ServerId, ServerName) ->
+    %% Empty payload for offline message
+    publish_mcp_server_message(MqttClient, ServerId, ServerName, undefined, server_presence,
+        #{retain => true}, <<>>).
 
-publish_mcp_server_message(ServerId, ServerName, McpClientId, TopicType, Flags, Payload) ->
+-spec publish_mcp_server_message(MqttClient :: pid(), ServerId :: binary(), ServerName :: binary(), McpClientId :: binary(), topic_type(), flags(), Payload :: binary()) ->
+    ok | {error, #{reason := term(), _ => _}}.
+publish_mcp_server_message(MqttClient, ServerId, ServerName, McpClientId, TopicType, Flags, Payload) ->
     Topic = get_topic(TopicType, #{
         server_id => ServerId,
         server_name => ServerName,
         mcp_clientid => McpClientId
     }),
-    UserProps = [
-        {<<"MCP-COMPONENT-TYPE">>, <<"mcp-server">>},
-        {<<"MCP-MQTT-CLIENT-ID">>, ServerId}
-    ],
-    Headers = #{
-        properties => #{
-            'User-Property' => UserProps
-        }
+    PubProps = #{
+        'User-Property' => [
+            {<<"MCP-COMPONENT-TYPE">>, <<"mcp-server">>},
+            {<<"MCP-MQTT-CLIENT-ID">>, ServerId}
+        ]
     },
     QoS = 1,
-    MqttMsg = emqx_message:make(ServerId, QoS, Topic, Payload, Flags, Headers),
-    _ = emqx:publish(MqttMsg),
-    ok.
+    Result = emqtt:publish(MqttClient, Topic, PubProps, Payload, maps:to_list(Flags#{qos => 1})),
+    handle_pub_result(Result).
 
 get_mcp_component_type_from_mqtt_props(#{'User-Property' := UserProps} = Props) ->
     case lists:keyfind(<<"MCP-COMPONENT-TYPE">>, 1, UserProps) of
@@ -229,3 +237,30 @@ get_mcp_client_id_from_mqtt_props(Props) ->
 
 gen_mqtt_client_id() ->
     emqx_utils:gen_id(8).
+
+handle_pub_result(ok) ->
+    ok;
+handle_pub_result({ok, #{reason_code := ?RC_SUCCESS}}) ->
+    ok;
+handle_pub_result({ok, #{reason_code := ?RC_NO_MATCHING_SUBSCRIBERS}}) ->
+    {error, #{reason => no_matching_subscribers}};
+handle_pub_result({ok, Reply}) ->
+    {error, classify_reply(Reply)};
+handle_pub_result({error, Reason}) ->
+    {error, classify_error(Reason)}.
+
+classify_reply(Reply = #{reason_code := _}) ->
+    Reply#{reason => puback_error_code}.
+
+classify_error(disconnected) ->
+    #{reason => disconnected};
+classify_error(ecpool_empty) ->
+    #{reason => disconnected};
+classify_error({disconnected, RC, _}) ->
+    #{reason => disconnected, reason_code => RC};
+classify_error({shutdown, Details}) ->
+    #{reason => disconnected, details => Details};
+classify_error(shutdown) ->
+    #{reason => disconnected};
+classify_error(Reason) ->
+    #{reason => Reason}.

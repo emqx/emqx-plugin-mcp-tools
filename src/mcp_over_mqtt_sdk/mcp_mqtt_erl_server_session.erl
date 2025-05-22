@@ -15,21 +15,27 @@
 %%--------------------------------------------------------------------
 
 -module(mcp_mqtt_erl_server_session).
+-feature(maybe_expr, enable).
 
 -include_lib("emqx_plugin_helper/include/logger.hrl").
 -include("mcp_mqtt_erl_errors.hrl").
+-include("mcp_mqtt_erl_types.hrl").
 
 -export_type([
     t/0
 ]).
 
 -export([
-    new/0,
+    init/0,
     handle_rpc_msg/2,
+    handle_rpc_timeout/2,
+    send_server_request/3,
+    send_server_notification/2
 ]).
 
 -type t() :: #{
     mod := module(),
+    state => created | initialized,
     client_info := map(),
     client_capabilities := map(),
     next_req_id := integer(),
@@ -41,259 +47,333 @@
     pending_requests => pending_requests()
 }.
 
--type mcp_msg_type() ::
-    initialize
-    | initialized
-    | ping
-    | progress_notification
-    | set_logging_level
-    | list_resources
-    | list_resource_templates
-    | read_resource
-    | subscribe_resource
-    | unsubscribe_resource
-    | call_tool
-    | list_prompts
-    | get_prompt
-    | complete
-    | list_tools
-    | roots_list_changed
-    | list_roots.
-
 -type pending_requests() :: #{
     integer() => #{
         mcp_msg_type := mcp_msg_type(),
+        caller := pid() | no_caller,
         timestamp := integer()
     }
 }.
 
-new(Mod, ServerId, ServerName, McpClientId, ClientInitParams) ->
-    case verify_initialize_params(ClientInitParams) of
-        {ok, ClientParams} ->
-            {ok, ClientParams#{
-                next_req_id => 0,
-                mod => Mod,
-                server_id => ServerId,
-                server_name => ServerName,
-                mcp_client_id => McpClientId,
-                loop_data => #{},
-                pending_requests => #{}
-            }};
+-type client_params() :: #{
+    client_info := map(),
+    client_capabilities := map()
+}.
+-type error_details() :: #{
+    reason := term(),
+    _ => _
+}.
+
+-type loop_data() :: term().
+
+-callback server_name() -> binary().
+-callback server_version() -> binary().
+-callback server_capabilities() -> map().
+-callback initialize(ServerId :: binary(), client_params()) -> {ok, loop_data()} | {error, error_response()}.
+-callback set_logging_level(LoggingLevel :: binary(), loop_data()) -> {ok, loop_data()} | {error, error_response()}.
+-callback list_resources(loop_data()) -> {ok, [resource_def()], loop_data()} | {error, error_response()}.
+-callback list_resource_templates(loop_data()) -> {ok, [resource_tmpl()], loop_data()} | {error, error_response()}.
+-callback read_resource(Uri :: binary(), loop_data()) -> {ok, resource(), loop_data()} | {error, error_response()}.
+-callback call_tool(ToolName :: binary(), Args :: map(), loop_data()) ->
+    {ok, call_tool_result() | [call_tool_result()], loop_data()}
+  | {error, call_tool_result() | [call_tool_result()]}.
+-callback list_tools(loop_data()) -> {ok, [tool_def()], loop_data()} | {error, error_response()}.
+-callback list_prompts(loop_data()) -> {ok, [prompt_def()], loop_data()} | {error, error_response()}.
+-callback get_prompt(Name :: binary(), Args :: map(), loop_data()) ->
+    {ok, get_prompt_result(), loop_data()} | {error, error_response()}.
+-callback complete(Ref :: binary(), Args :: map(), loop_data()) ->
+    {ok, complete_result(), loop_data()} | {error, error_response()}.
+
+-define(MAX_PAGE_SIZE, 10).
+
+-spec init() -> {ok, t()} | {error, error_details()}.
+init(MqttClient, Mod, ServerId, _ClientInfo = #{
+    mcp_clientid => McpClientId,
+    init_params => #{req_id := ReqId} = InitParams
+}) ->
+    maybe
+        {ok, ClientParams} ?= verify_initialize_params(InitParams),
+        {ok, LoopData} ?= Mod:initialize(ServerId, ClientParams),
+        %% send initialize response to client
+        ServerName = Mod:server_name(),
+        ServerVsn = Mod:server_version(),
+        ServerCapabilities = Mod:server_capabilities(),
+        ServerInfo = #{<<"name">> => ServerName, <<"version">> => ServerVsn},
+        InitializeResp = mcp_mqtt_erl_msg:initialize_response(
+            ReqId, ServerInfo, ServerCapabilities
+        ),
+        ok ?= mcp_mqtt_erl_msg:publish_mcp_server_message(
+            MqttClient, ServerId, ServerName, McpClientId, rpc, #{}, InitializeResp
+        ),
+        {ok, ClientParams#{
+            state => created,
+            mqtt_client => MqttClient,
+            next_req_id => 0,
+            mod => Mod,
+            server_id => ServerId,
+            server_name => ServerName,
+            mcp_client_id => McpClientId,
+            loop_data => LoopData,
+            pending_requests => #{}
+        }}
+    else
+        {error, #{reason := Reason}} = Err when
+                Reason == missing_capabilities;
+                Reason == missing_client_info;
+                Reason == missing_protocol_version ->
+            ErrResult = mcp_mqtt_erl_msg:json_rpc_error(ReqId, ?ERR_C_REQUIRED_FILED_MISSING, Reason, #{}),
+            ok = mcp_mqtt_erl_msg:publish_mcp_server_message(
+                MqttClient, ServerId, ServerName, McpClientId, rpc, #{}, ErrResult
+            ),
+            Err;
+        {error, #{reason := ?ERR_UNSUPPORTED_PROTOCOL_VERSION, vsn := Vsn}} = Err ->
+            ErrResult = mcp_mqtt_erl_msg:json_rpc_error(ReqId, ?ERR_C_UNSUPPORTED_PROTOCOL_VERSION, Reason, #{}),
+            mcp_mqtt_erl_msg:publish_mcp_server_message(
+                MqttClient, ServerId, ServerName, McpClientId, rpc, #{}, ErrResult
+            ),
+            Err;
+        {error, #{code := ErrCode, message := ErrMsg, data := ErrData} = Error} ->
+            ErrResult = mcp_mqtt_erl_msg:json_rpc_error(ReqId, ErrCode, ErrMsg, ErrData),
+            mcp_mqtt_erl_msg:publish_mcp_server_message(
+                MqttClient, ServerId, ServerName, McpClientId, rpc, #{}, ErrResult
+            ),
+            {error, Error#{reason => callback_mod_replies_an_error}}
         {error, _} = Err ->
             Err
     end.
 
-handle_rpc_msg(Session, #{type := json_rpc_request, method := Method, id := Id, params := Params} = Msg) ->
-    handle_json_rpc_request(Session, Method, Id, Params);
-handle_rpc_msg(Session, #{type := json_rpc_notification, method := Method, params := Params} = Msg) ->
+send_server_request(_Session, _Caller, _Req) ->
+    throw({not_implemented, send_server_request}).
+
+send_server_notification(_Session, _Notif) ->
+    throw({not_implemented, send_server_notification}).
+
+handle_rpc_msg(Session, #{type := json_rpc_request, method := Method, id := ReqId, params := Params}) ->
+    handle_rpc_request_and_send_response(Session, Method, ReqId, Params);
+handle_rpc_msg(Session, #{type := json_rpc_notification, method := Method, params := Params}) ->
     handle_json_rpc_notification(Session, Method, Params);
-handle_rpc_msg(Session, #{type := json_rpc_response, id := Id, result := Result} = Msg) ->
-    handle_json_rpc_response(Session, Id, Result);
-handle_rpc_msg(Session, #{type := json_rpc_error, id := Id, error := Error} = Msg) ->
-    handle_json_rpc_error(Session, Id, Error);
+handle_rpc_msg(Session, #{type := json_rpc_response, id := ReqId, result := Result}) ->
+    handle_json_rpc_response(Session, ReqId, Result);
+handle_rpc_msg(Session, #{type := json_rpc_error, id := ReqId, error := Error}) ->
+    handle_json_rpc_error(Session, ReqId, Error);
 handle_rpc_msg(Session, Msg) ->
     {error, #{reason => ?ERR_MALFORMED_JSON_RPC, msg => Msg}}.
 
-handle_json_rpc_request(Session, <<"ping">>, Id, Params) ->
-    PingResp = mcp_mqtt_erl_msg:json_rpc_response(Id, #{}),
-    mcp_mqtt_erl_msg:publish_mcp_server_message(
-        maps:get(server_id, Session),
-        maps:get(server_name, Session),
-        maps:get(mcp_client_id, Session),
-        rpc, #{}, PingResp
-    ),
-    {ok, Session};
-handle_json_rpc_request(Session, <<"logging/setLevel">>, Id, Params) ->
+handle_rpc_timeout(#{pending_requests := Pendings0, timers := Timers} = Session, ReqId) ->
+    case maps:take(ReqId, Pendings0) of
+        {#{caller := Caller}, Pendings} ->
+            gen_statem:reply(Caller, {error, #{reason => ?ERR_TIMEOUT}}),
+            {ok, Session#{pending_requests => Pendings, timers := maps:remove(ReqId, Timers)}};
+        {_, Pendings} ->
+            ?SLOG(error, #{msg => "no caller to reply", id => ReqId}),
+            {ok, Session#{pending_requests => Pendings, timers := maps:remove(ReqId, Timers)}};
+        error ->
+            ok
+    end.
+
+%%==============================================================================
+%% Handle JSON-RPC requests/responses/notifications
+%%==============================================================================
+handle_rpc_request_and_send_response(Session, Method, ReqId, Params) ->
+    MqttClient = maps:get(mqtt_client, Session),
+    ServerId = maps:get(server_id, Session),
+    ServerName = maps:get(server_name, Session),
+    McpClientId = maps:get(mcp_client_id, Session),
+    case handle_json_rpc_request(Session, Method, ReqId, Params) of
+        {ok, Result, Session1} ->
+            mcp_mqtt_erl_msg:publish_mcp_server_message(
+                MqttClient, ServerId, ServerName, McpClientId, rpc, #{}, Result
+            ),
+            {ok, Session1};
+        {error, #{code := ErrCode, message := ErrMsg, data := ErrData}} ->
+            ErrResult = mcp_mqtt_erl_msg:json_rpc_error(ReqId, ErrCode, ErrMsg, ErrData),
+            mcp_mqtt_erl_msg:publish_mcp_server_message(
+                MqttClient, ServerId, ServerName, McpClientId, rpc, #{}, ErrResult
+            ),
+            {error, #{reason => ErrMsg, method => Method, id => ReqId}},
+    end.
+
+handle_json_rpc_request(Session, <<"ping">>, ReqId, _) ->
+    PingResp = mcp_mqtt_erl_msg:json_rpc_response(ReqId, #{}),
+    {ok, PingResp, Session};
+handle_json_rpc_request(Session, <<"logging/setLevel">>, ReqId, #{<<"level">> := Level}) ->
     Mod = maps:get(mod, Session),
     LoopData = maps:get(loop_data, Session),
-    case Mod:set_logging_level(maps:get(<<"level">>), LoopData) of
+    case Mod:set_logging_level(Level, LoopData) of
         {ok, LoopData1} ->
-            LoggingResp = mcp_mqtt_erl_msg:json_rpc_response(Id, #{}),
-            mcp_mqtt_erl_msg:publish_mcp_server_message(
-                maps:get(server_id, Session),
-                maps:get(server_name, Session),
-                maps:get(mcp_client_id, Session),
-                rpc, #{}, LoggingResp
-            ),
-            {ok, Session#{loop_data => LoopData1}};
+            LoggingResp = mcp_mqtt_erl_msg:json_rpc_response(ReqId, #{}),
+            {ok, LoggingResp, Session#{loop_data => LoopData1}};
         {error, _} = Err ->
-            {error, Err}
+            Err
     end;
-handle_json_rpc_request(Session, <<"resources/list">>, Id, Params) ->
+handle_json_rpc_request(Session, <<"resources/list">>, ReqId, #{<<"cursor">> := PageNo}) ->
+    case maps:find(cached_resources, Session) of
+        {ok, Resources} ->
+            ResList = lists:sublist(Resources, ?MAX_PAGE_SIZE * PageNo, ?MAX_PAGE_SIZE),
+            Result = mcp_mqtt_erl_msg:json_rpc_response(ReqId,
+                #{<<"resources">> => ResList, <<"nextCursor">> => PageNo + 1}),
+            {ok, Result, Session};
+        error ->
+            {error, #{
+                code => ?ERR_C_INVALID_CURSOR,
+                message => <<"Invalid cursor">>,
+                data => #{cursor => PageNo}
+            }}
+    end;
+handle_json_rpc_request(Session, <<"resources/list">>, ReqId, _) ->
     Mod = maps:get(mod, Session),
     LoopData = maps:get(loop_data, Session),
-    case Mod:list_resources(Params, LoopData) of
+    case Mod:list_resources(LoopData) of
         {ok, Resources, LoopData1} ->
-            ListResp = mcp_mqtt_erl_msg:json_rpc_response(Id, Resources),
-            mcp_mqtt_erl_msg:publish_mcp_server_message(
-                maps:get(server_id, Session),
-                maps:get(server_name, Session),
-                maps:get(mcp_client_id, Session),
-                rpc, #{}, ListResp
-            ),
-            {ok, Session#{loop_data => LoopData1}};
+            Resp = case length(Resources) > ?MAX_PAGE_SIZE of
+                true ->
+                    ResList = lists:sublist(Resources, ?MAX_PAGE_SIZE),
+                    PageNo = 1, %% the second page
+                    mcp_mqtt_erl_msg:json_rpc_response(ReqId,
+                        #{<<"resources">> => ResList, <<"nextCursor">> => PageNo}),
+                false ->
+                    mcp_mqtt_erl_msg:json_rpc_response(ReqId, #{<<"resources">> => ResList}),
+            end,
+            {ok, Resp, Session#{loop_data => LoopData1, cached_resources => Resources}};
         {error, _} = Err ->
             {error, Err}
     end;
-handle_json_rpc_request(Session, <<"resources/templates/list">>, Id, Params) ->
+handle_json_rpc_request(Session, <<"resources/templates/list">>, ReqId, #{<<"cursor">> := PageNo}) ->
+    case maps:find(cached_resource_templates, Session) of
+        {ok, ResourceTemplates} ->
+            ResList = lists:sublist(ResourceTemplates, ?MAX_PAGE_SIZE * PageNo, ?MAX_PAGE_SIZE),
+            Result = mcp_mqtt_erl_msg:json_rpc_response(ReqId,
+                #{<<"resources">> => ResList, <<"nextCursor">> => PageNo + 1}),
+            {ok, Result, Session};
+        error ->
+            {error, #{
+                code => ?ERR_C_INVALID_CURSOR,
+                message => <<"Invalid cursor">>,
+                data => #{cursor => PageNo}
+            }}
+    end;
+handle_json_rpc_request(Session, <<"resources/templates/list">>, ReqId, _) ->
     Mod = maps:get(mod, Session),
     LoopData = maps:get(loop_data, Session),
-    case Mod:list_resource_templates(Params, LoopData) of
-        {ok, Templates, LoopData1} ->
-            ListResp = mcp_mqtt_erl_msg:json_rpc_response(Id, Templates),
-            mcp_mqtt_erl_msg:publish_mcp_server_message(
-                maps:get(server_id, Session),
-                maps:get(server_name, Session),
-                maps:get(mcp_client_id, Session),
-                rpc, #{}, ListResp
-            ),
-            {ok, Session#{loop_data => LoopData1}};
+    case Mod:list_resource_templates(LoopData) of
+        {ok, ResourceTemplates, LoopData1} ->
+            Resp = case length(ResourceTemplates) > ?MAX_PAGE_SIZE of
+                true ->
+                    ResList = lists:sublist(ResourceTemplates, ?MAX_PAGE_SIZE),
+                    PageNo = 1, %% the second page
+                    mcp_mqtt_erl_msg:json_rpc_response(ReqId,
+                        #{<<"resources">> => ResList, <<"nextCursor">> => PageNo}),
+                false ->
+                    mcp_mqtt_erl_msg:json_rpc_response(ReqId, #{<<"resourceTemplates">> => ResList}),
+            end,
+            {ok, Resp, Session#{loop_data => LoopData1, cached_resource_templates => ResourceTemplates}};
         {error, _} = Err ->
             {error, Err}
     end;
-handle_json_rpc_request(Session, <<"resources/read">>, Id, Params) ->
+handle_json_rpc_request(Session, <<"resources/read">>, ReqId, #{<<"uri">> := Uri}) ->
     Mod = maps:get(mod, Session),
     LoopData = maps:get(loop_data, Session),
-    case Mod:read_resource(Params, LoopData) of
+    case Mod:read_resource(Uri, LoopData) of
         {ok, Resource, LoopData1} ->
-            ReadResp = mcp_mqtt_erl_msg:json_rpc_response(Id, Resource),
-            mcp_mqtt_erl_msg:publish_mcp_server_message(
-                maps:get(server_id, Session),
-                maps:get(server_name, Session),
-                maps:get(mcp_client_id, Session),
-                rpc, #{}, ReadResp
-            ),
-            {ok, Session#{loop_data => LoopData1}};
+            ReadResp = mcp_mqtt_erl_msg:json_rpc_response(ReqId, #{<<"contents">> => [Resource]}),
+            {ok, ReadResp, Session#{loop_data => LoopData1}};
         {error, _} = Err ->
             {error, Err}
     end;
-handle_json_rpc_request(_Session, <<"resources/subscribe">>, _Id, _Params, _Msg) ->
-    throw({error, not_implemented});
-handle_json_rpc_request(_Session, <<"resources/unsubscribe">>, _Id, _Params, _Msg) ->
-    throw({error, not_implemented});
-handle_json_rpc_request(Session, <<"tools/call">>, Id, Params) ->
-    ToolName = maps:get(<<"name">>, Params),
-    Args = maps:get(<<"arguments">>, Params),
+handle_json_rpc_request(_Session, <<"resources/subscribe">>, _Id, _Params) ->
+    throw({not_implemented, subscribe_resource});
+handle_json_rpc_request(_Session, <<"resources/unsubscribe">>, _Id, _Params) ->
+    throw({not_implemented, unsubscribe_resource});
+handle_json_rpc_request(Session, <<"tools/call">>, ReqId, #{<<"name">> := ToolName, <<"arguments">> := Args}) ->
     Mod = maps:get(mod, Session),
     LoopData = maps:get(loop_data, Session),
     case Mod:call_tool(ToolName, Args, LoopData) of
         {ok, Result, LoopData1} ->
-            CallResp = mcp_mqtt_erl_msg:json_rpc_response(Id, Result),
-            mcp_mqtt_erl_msg:publish_mcp_server_message(
-                maps:get(server_id, Session),
-                maps:get(server_name, Session),
-                maps:get(mcp_client_id, Session),
-                rpc, #{}, CallResp
-            ),
-            {ok, Session#{loop_data => LoopData1}};
-        {error, _} = Err ->
-            {error, Err}
+            CallToolResp = mcp_mqtt_erl_msg:json_rpc_response(ReqId, #{
+                <<"content">> => ensure_list(Result),
+                <<"isError">> => false
+            }),
+            {ok, CallToolResp, Session#{loop_data => LoopData1}};
+        {error, Result} ->
+            CallToolResp = mcp_mqtt_erl_msg:json_rpc_response(ReqId, #{
+                <<"content">> => ensure_list(Result),
+                <<"isError">> => true
+            }),
+            {ok, CallToolResp, Session}
     end;
-handle_json_rpc_request(Session, <<"tools/list">>, Id, Params) ->
+handle_json_rpc_request(Session, <<"tools/list">>, ReqId, _Params) ->
     Mod = maps:get(mod, Session),
     LoopData = maps:get(loop_data, Session),
-    case Mod:list_tools(Params, LoopData) of
+    case Mod:list_tools(LoopData) of
         {ok, Tools, LoopData1} ->
-            ListResp = mcp_mqtt_erl_msg:json_rpc_response(Id, Tools),
-            mcp_mqtt_erl_msg:publish_mcp_server_message(
-                maps:get(server_id, Session),
-                maps:get(server_name, Session),
-                maps:get(mcp_client_id, Session),
-                rpc, #{}, ListResp
-            ),
-            {ok, Session#{loop_data => LoopData1}};
+            ListResp = mcp_mqtt_erl_msg:json_rpc_response(ReqId, #{<<"tools">> => Tools}),
+            {ok, ListResp, Session#{loop_data => LoopData1}};
         {error, _} = Err ->
             {error, Err}
     end;
-handle_json_rpc_request(Session, <<"prompts/list">>, Id, Params) ->
+handle_json_rpc_request(Session, <<"prompts/list">>, ReqId, _Params) ->
     Mod = maps:get(mod, Session),
     LoopData = maps:get(loop_data, Session),
-    case Mod:list_prompts(Params, LoopData) of
+    case Mod:list_prompts(LoopData) of
         {ok, Prompts, LoopData1} ->
-            ListResp = mcp_mqtt_erl_msg:json_rpc_response(Id, Prompts),
-            mcp_mqtt_erl_msg:publish_mcp_server_message(
-                maps:get(server_id, Session),
-                maps:get(server_name, Session),
-                maps:get(mcp_client_id, Session),
-                rpc, #{}, ListResp
-            ),
-            {ok, Session#{loop_data => LoopData1}};
+            ListResp = mcp_mqtt_erl_msg:json_rpc_response(ReqId, #{<<"prompts">> => Prompts}),
+            {ok, ListResp, Session#{loop_data => LoopData1}};
         {error, _} = Err ->
             {error, Err}
     end;
-handle_json_rpc_request(Session, <<"prompts/get">>, Id, Params) ->
+handle_json_rpc_request(Session, <<"prompts/get">>, ReqId, #{<<"name">> := Name, <<"arguments">> := Args}) ->
     Mod = maps:get(mod, Session),
     LoopData = maps:get(loop_data, Session),
-    case Mod:get_prompt(Params, LoopData) of
+    case Mod:get_prompt(Name, Args, LoopData) of
         {ok, Prompt, LoopData1} ->
-            GetResp = mcp_mqtt_erl_msg:json_rpc_response(Id, Prompt),
-            mcp_mqtt_erl_msg:publish_mcp_server_message(
-                maps:get(server_id, Session),
-                maps:get(server_name, Session),
-                maps:get(mcp_client_id, Session),
-                rpc, #{}, GetResp
-            ),
-            {ok, Session#{loop_data => LoopData1}};
+            GetResp = mcp_mqtt_erl_msg:json_rpc_response(ReqId, Prompt),
+            {ok, GetResp, Session#{loop_data => LoopData1}};
         {error, _} = Err ->
             {error, Err}
     end;
-handle_json_rpc_request(Session, <<"completion/complete">>, Id, Params) ->
+handle_json_rpc_request(Session, <<"completion/complete">>, ReqId, #{
+        <<"ref">> := Ref, <<"argument">> := Args}) ->
     Mod = maps:get(mod, Session),
     LoopData = maps:get(loop_data, Session),
-    case Mod:complete(Params, LoopData) of
+    case Mod:complete(Ref, Args, LoopData) of
         {ok, Completion, LoopData1} ->
-            CompleteResp = mcp_mqtt_erl_msg:json_rpc_response(Id, Completion),
-            mcp_mqtt_erl_msg:publish_mcp_server_message(
-                maps:get(server_id, Session),
-                maps:get(server_name, Session),
-                maps:get(mcp_client_id, Session),
-                rpc, #{}, CompleteResp
-            ),
+            CompleteResp = mcp_mqtt_erl_msg:json_rpc_response(ReqId, #{<<"completion">> => Completion}),
             {ok, Session#{loop_data => LoopData1}};
         {error, _} = Err ->
             {error, Err}
     end.
 
-handle_json_rpc_notification(#{pending_requests := Pendings, timers := Timers} = Session, <<"notifications/roots/list_changed">>, Params) ->
-    Id = maps:get(next_req_id, Session),
-    ListRequest = mcp_mqtt_erl_msg:json_rpc_request(Id, <<"roots/list">>, #{}),
+handle_json_rpc_notification(Session, <<"notifications/initialized">>, _) ->
+    {ok, Session#{state => initialized}};
+handle_json_rpc_notification(#{pending_requests := Pendings, timers := Timers} = Session, <<"notifications/roots/list_changed">>, _) ->
+    ReqId = maps:get(next_req_id, Session),
+    McpClientId = maps:get(mcp_client_id, Session),
+    ListRequest = mcp_mqtt_erl_msg:json_rpc_request(ReqId, <<"roots/list">>, #{}),
     mcp_mqtt_erl_msg:publish_mcp_server_message(
+        maps:get(mqtt_client, Session),
         maps:get(server_id, Session),
         maps:get(server_name, Session),
-        maps:get(mcp_client_id, Session),
+        McpClientId,
         rpc, #{}, ListRequest
     ),
-    Pendings1 = Pendings#{Id => #{mcp_msg_type => list_roots, timestamp => ts_now()}},
-    Timers1 = Timers#{Id => erlang:send_after(?RPC_TIMEOUT, self(), {rpc_request_timeout, Id})},
-    {ok, Session#{next_req_id => Id + 1, pending_requests => Pendings1, timers := Timers1}}.
+    Pendings1 = Pendings#{ReqId => #{mcp_msg_type => list_roots, timestamp => ts_now(), caller => no_caller}},
+    Timers1 = Timers#{ReqId => start_rpc_timer(McpClientId, ReqId)},
+    {ok, Session#{next_req_id => ReqId + 1, pending_requests => Pendings1, timers := Timers1}}.
 
-handle_json_rpc_response(#{pending_requests := Pendings0, timers := Timers} = Session, Id, Result) ->
-    case maps:find(Id, Pendings0) of
-        {ok, #{mcp_msg_type := list_roots}} ->
-            Pendings = maps:remove(Id, Pendings0),
-            {TRef, Timers1} = maps:take(Id, Timers),
+handle_json_rpc_response(#{pending_requests := Pendings0, timers := Timers} = Session, ReqId, Result) ->
+    case maps:take(ReqId, Pendings0) of
+        {#{caller := Caller} = PendingReq, Pendings} ->
+            {TRef, Timers1} = maps:take(ReqId, Timers),
             erlang:cancel_timer(TRef),
-            {ok, Session#{pending_requests => Pendings, client_roots => Result, timers := Timers1}};
-        {ok, #{caller := Caller}} ->
-            Pendings = maps:remove(Id, Pendings0),
-            {TRef, Timers1} = maps:take(Id, Timers),
+            Session1 = maybe_reply_to_caller(Session, Caller, PendingReq, Result),
+            {ok, Session1#{pending_requests => Pendings, timers := Timers1}};
+        {_, Pendings} ->
+            {TRef, Timers1} = maps:take(ReqId, Timers),
             erlang:cancel_timer(TRef),
-            gen_statem:reply(Caller, {ok, Result}),
+            ?SLOG(error, #{msg => "no caller to reply", id => ReqId}),
             {ok, Session#{pending_requests => Pendings, timers := Timers1}};
         error ->
             {error, #{reason => ?ERR_WRONG_SERVER_RESPONSE_ID}}
-    end.
-
-handle_rpc_timeout(#{pending_requests := Pendings0, timers := Timers} = Session, Id) ->
-    case maps:find(Id, Pendings0) of
-        {ok, #{caller := Caller}} ->
-            Pendings = maps:remove(Id, Pendings0),
-            {TRef, Timers1} = maps:take(Id, Timers),
-            erlang:cancel_timer(TRef),
-            gen_statem:reply(Caller, {error, #{reason => ?ERR_TIMEOUT}}),
-            {ok, Session#{pending_requests => Pendings, timers := Timers1}};
-        error ->
-            ok
     end.
 
 %%==============================================================================
@@ -319,5 +399,20 @@ verify_initialize_params(#{<<"protocolVersion">> := Vsn} = Params) ->
 verify_initialize_params(Params) ->
     {error, #{reason => missing_protocol_version}}.
 
+maybe_reply_to_caller(Session, no_caller, #{mcp_msg_type := list_roots}, Result) ->
+    Session#{client_roots => Result};
+maybe_reply_to_caller(Session, Caller, _, Result) ->
+    gen_statem:reply(Caller, {ok, Result}),
+    Session.
+
+start_rpc_timer(McpClientId, ReqId) ->
+    erlang:send_after(?RPC_TIMEOUT, self(), {rpc_request_timeout, McpClientId, ReqId})
+
 ts_now() ->
     erlang:system_time(microsecond).
+
+ensure_list(Term) ->
+    case is_list(Term) of
+        true -> Term
+        false -> [Term]
+    end.

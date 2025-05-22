@@ -4,7 +4,7 @@
 -define(PLUGIN_NAME_VSN, <<?PLUGIN_NAME, "-", ?PLUGIN_VSN>>).
 -define(TAG, "MCP_TOOLS").
 
--define(MCP_VERSION, "2024-11-05").
+-define(MCP_VERSION, "2025-03-26").
 -define(INIT_TIMEOUT, 5_000).
 -define(RPC_TIMEOUT, 5_000).
 -define(MCP_SERVER_ID(NAME),

@@ -1,5 +1,5 @@
 {application, emqx_plugin_mcp_tools, [
-    {description, "Another amazing EMQX plugin."},
+    {description, "An EMQX Plugin that provides some useful tools via MCP over MQTT."},
     {vsn, "0.1.0"},
     {modules, []},
     {registered, [emqx_plugin_mcp_tools_sup]},
