@@ -29,7 +29,7 @@
 -export([
     initialize_request/2,
     initialize_request/3,
-    initialize_response/3,
+    initialize_response/4,
     initialized_notification/0
 ]).
 
@@ -40,8 +40,6 @@
     send_server_offline_message/3,
     publish_mcp_server_message/7
 ]).
-
--export([gen_mqtt_client_id/0]).
 
 -export([get_mcp_component_type_from_mqtt_props/1,
          get_mcp_client_id_from_mqtt_props/1]).
@@ -72,13 +70,14 @@ initialize_request(Id, ClientInfo, Capabilities) ->
         }
     ).
 
-initialize_response(Id, ServerInfo, Capabilities) ->
+initialize_response(Id, ServerInfo, Capabilities, Instructions) ->
     json_rpc_response(
         Id,
         #{
             <<"protocolVersion">> => <<?MCP_VERSION>>,
             <<"serverInfo">> => ServerInfo,
-            <<"capabilities">> => Capabilities
+            <<"capabilities">> => Capabilities,
+            <<"instructions">> => Instructions
         }
     ).
 
@@ -200,7 +199,7 @@ send_server_offline_message(MqttClient, ServerId, ServerName) ->
     publish_mcp_server_message(MqttClient, ServerId, ServerName, undefined, server_presence,
         #{retain => true}, <<>>).
 
--spec publish_mcp_server_message(MqttClient :: pid(), ServerId :: binary(), ServerName :: binary(), McpClientId :: binary() | undefined, topic_type(), flags(), Payload :: binary()) ->
+-spec publish_mcp_server_message(MqttClient :: pid() | local, ServerId :: binary(), ServerName :: binary(), McpClientId :: binary() | undefined, topic_type(), flags(), Payload :: binary()) ->
     ok | {error, #{reason := term(), _ => _}}.
 publish_mcp_server_message(MqttClient, ServerId, ServerName, McpClientId, TopicType, Flags, Payload) ->
     Topic = get_topic(TopicType, #{
@@ -208,6 +207,23 @@ publish_mcp_server_message(MqttClient, ServerId, ServerName, McpClientId, TopicT
         server_name => ServerName,
         mcp_client_id => McpClientId
     }),
+    do_publish_mcp_server_message(MqttClient, Topic, ServerId, Payload, Flags).
+
+do_publish_mcp_server_message(local, Topic, ServerId, Payload, Flags) ->
+    UserProps = [
+        {<<"MCP-COMPONENT-TYPE">>, <<"mcp-server">>},
+        {<<"MCP-MQTT-CLIENT-ID">>, ServerId}
+    ],
+    Headers = #{
+        properties => #{
+            'User-Property' => UserProps
+        }
+    },
+    QoS = 1,
+    MqttMsg = emqx_message:make(ServerId, QoS, Topic, Payload, Flags, Headers),
+    _ = emqx:publish(MqttMsg),
+    ok;
+do_publish_mcp_server_message(MqttClient, Topic, ServerId, Payload, Flags) ->
     PubProps = #{
         'User-Property' => [
             {<<"MCP-COMPONENT-TYPE">>, <<"mcp-server">>},
@@ -235,9 +251,6 @@ get_mcp_client_id_from_mqtt_props(#{'User-Property' := UserProps}) ->
     end;
 get_mcp_client_id_from_mqtt_props(_Props) ->
     {error, user_props_not_found}.
-
-gen_mqtt_client_id() ->
-    emqx_utils:gen_id().
 
 handle_pub_result(ok) ->
     ok;

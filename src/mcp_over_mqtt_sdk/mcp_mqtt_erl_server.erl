@@ -25,9 +25,9 @@
 
 %% API
 -export([
-    start_link/1,
+    start_link/2,
     stop/1,
-    process_name/2,
+    process_name/2
 ]).
 
 -export([
@@ -47,8 +47,10 @@
 
 -type mcp_client_id() :: binary().
 
+-type broker_address() :: {emqtt:host(), emqtt:port()} | local.
+
 -type config() :: #{
-    broker_address := {emqtt:host(), emqtt:port()} | local,
+    broker_address := broker_address(),
     callback_mod := module(),
     mqtt_options => map()
 }.
@@ -90,17 +92,18 @@
 %% API
 %%==============================================================================
 -spec start_link(integer(), config()) -> gen_statem:start_ret().
-start_link(Idx, #{callback_mod := Mod} = Conf) ->
+start_link(Idx, #{callback_mod := Mod, broker_address := BrokerAddr} = Conf) ->
     ServerName = Mod:server_name(),
     RegisterName = process_name(ServerName, Idx),
-    ServerId = Mod:server_id(Idx),
-    gen_statem:start_link({local, RegisterName}, ?MODULE, Conf#{server_id => ServerId}, []).
+    MqttOpts = maps:get(mqtt_options, Conf, #{}),
+    gen_statem:start_link({local, RegisterName}, ?MODULE, {Idx, BrokerAddr, Mod, MqttOpts}, []).
 
 stop(Pid) ->
     gen_statem:cast(Pid, stop).
 
 process_name(ServerName, Idx) ->
-    binary_to_atom(<<ServerName/binary, ":", Idx/binary>>).
+    Idx1 = integer_to_binary(Idx),
+    binary_to_atom(<<ServerName/binary, ":", Idx1/binary>>).
 
 -spec send_request(pid(), mcp_client_id(), server_request()) -> Reply :: term().
 send_request(Pid, TargetClient, Req) ->
@@ -111,12 +114,18 @@ send_notification(Pid, Notif) ->
     gen_statem:cast(Pid, {server_notif, Notif}).
 
 %% gen_statem callbacks
--spec init(config()) -> {ok, state_name(), loop_data(), [gen_statem:action()]}.
-init(#{server_id := ServerId, broker_address := BrokerAddr, callback_mod := Mod} = Conf) ->
+-spec init({integer(), broker_address(), module(), map()}) ->
+    {ok, state_name(), loop_data(), [gen_statem:action()]}.
+init({Idx, BrokerAddr, Mod, MqttOpts}) ->
     process_flag(trap_exit, true),
-    RandId = list_to_binary(mcp_mqtt_erl_msg:gen_mqtt_client_id()),
+    ServerId =
+        case Mod:server_id(Idx) of
+            random -> list_to_binary(emqx_utils:gen_id());
+            Id -> Id
+        end,
     LoopData = #{
         callback_mod => Mod,
+        server_id => ServerId,
         sessions => #{}
     },
     case BrokerAddr of
@@ -124,7 +133,6 @@ init(#{server_id := ServerId, broker_address := BrokerAddr, callback_mod := Mod}
             %% Local mode, no need to connect to MQTT broker
             {ok, connected, LoopData#{mqtt_client => local}, []};
         {Host, Port} ->
-            MqttOpts = maps:get(mqtt_options, Conf, #{}),
             {ok, idle, LoopData#{mqtt_options => MqttOpts#{host => Host, port => Port}},
                 [{next_event, internal, connect_broker}]}
     end.
@@ -137,7 +145,7 @@ callback_mode() ->
     | gen_statem:event_handler_result(state_name(), loop_data()).
 idle(enter, _OldState, _LoopData) ->
     {keep_state_and_data, []};
-idle(internal, connect_broker, #{callback_mod := Mod} = LoopData) ->
+idle(internal, connect_broker, LoopData) ->
     MqttOpts = maps:get(mqtt_options, LoopData),
     case emqtt:start_link(MqttOpts) of
         {ok, MqttClient} ->
@@ -310,7 +318,7 @@ send_server_online_notification(MqttClient, Mod, ServerId) ->
         MqttClient,
         ServerId,
         Mod:server_name(),
-        Mod:description(),
+        Mod:server_instructions(),
         Mod:server_meta()
     ).
 

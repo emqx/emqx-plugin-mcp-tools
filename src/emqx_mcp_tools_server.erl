@@ -19,6 +19,7 @@
 -behaviour(mcp_mqtt_erl_server_session).
 
 -include("mcp_mqtt_erl_types.hrl").
+-include("emqx_mcp_tools.hrl").
 
 -export([
     start_link/2
@@ -26,7 +27,11 @@
 
 -export([
     server_name/0,
-    server_id/1
+    server_id/1,
+    server_version/0,
+    server_capabilities/0,
+    server_instructions/0,
+    server_meta/0
 ]).
 
 -export([
@@ -42,9 +47,20 @@
     complete/3
 ]).
 
--spec start_link(Idx, emqx_mcp_tools_server:config()) -> gen_statem:start_ret().
+-type loop_data() :: #{
+    server_id => binary(),
+    client_info => map(),
+    client_capabilities => map(),
+    mcp_client_id => binary(),
+    _ => any()
+}.
+
+-spec start_link(integer(), mcp_mqtt_erl_server:config()) -> gen_statem:start_ret().
 start_link(Idx, Conf) ->
-    mcp_mqtt_erl_server:start_link(Idx, ?MODULE, Conf).
+    mcp_mqtt_erl_server:start_link(Idx, Conf).
+
+server_version() ->
+    <<?PLUGIN_VSN>>.
 
 server_name() ->
     <<"emqx_tools/info_apis">>.
@@ -54,6 +70,27 @@ server_id(Idx) ->
     Idx1 = integer_to_binary(Idx),
     <<Name/binary, ":", Idx1/binary>>.
 
+server_capabilities() ->
+    #{
+        resources => #{
+            subscribe => true,
+            listChanged => true
+        },
+        tools => #{
+            listChanged => true
+        }
+    }.
+
+server_instructions() ->
+    <<"">>.
+
+server_meta() ->
+    #{
+        authorization => #{
+            roles => [<<"admin">>, <<"user">>]
+        }
+    }.
+
 -spec initialize(binary(), client_params()) -> {ok, loop_data()}.
 initialize(ServerId, #{client_info := ClientInfo, client_capabilities := Capabilities, mcp_client_id := McpClientId}) ->
     io:format("initialize --- server_id: ~p, client_info: ~p, client_capabilities: ~p, mcp_client_id: ~p~n", [ServerId, ClientInfo, Capabilities, McpClientId]),
@@ -61,7 +98,7 @@ initialize(ServerId, #{client_info := ClientInfo, client_capabilities := Capabil
         server_id => ServerId,
         client_info => ClientInfo,
         client_capabilities => Capabilities,
-        mcp_client_id => MqttClientId
+        mcp_client_id => McpClientId
     }}.
 
 -spec set_logging_level(binary(), loop_data()) -> {ok, loop_data()}.
@@ -69,7 +106,7 @@ set_logging_level(LoggingLevel, LoopData) ->
     io:format("set_logging_level --- logging_level: ~p~n", [LoggingLevel]),
     {ok, LoopData}.
 
--spec list_resource_templates(loop_data()) -> {ok, [resource_tmpl()], loop_data()}.
+-spec list_resources(loop_data()) -> {ok, [resource_def()], loop_data()}.
 list_resources(LoopData) ->
     io:format("list_resources --- ~n", []),
     Resources = [

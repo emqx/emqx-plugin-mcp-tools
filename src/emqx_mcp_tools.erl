@@ -28,6 +28,8 @@
 
 -export([
     get_config/0,
+    start_mcp_tool_servers/2,
+    stop_mcp_tool_servers/0,
     on_config_changed/2,
     on_health_check/1
 ]).
@@ -42,13 +44,33 @@
     terminate/2
 ]).
 
--define(?CB_MOD, emqx_mcp_tools_server).
+-define(CB_MOD, emqx_mcp_tools_server).
 
+-dialyzer({nowarn_function, [get_config/0, handle_continue/2]}).
 %%==============================================================================
 %% Config update
 %%==============================================================================
 get_config() ->
     emqx_plugin_helper:get_config(?PLUGIN_NAME_VSN).
+
+start_mcp_tool_servers(Mod, Config) ->
+    MqttBroker = maps:get(<<"mqtt_broker">>, Config, <<"local">>),
+    NumServerIds = maps:get(<<"num_server_ids">>, Config, 1),
+    MqttOptions = maps:get(<<"mqtt_options">>, Config, #{}),
+    Conf = #{
+        broker_address => get_broker_address(MqttBroker),
+        callback_mod => Mod,
+        mqtt_options => MqttOptions
+    },
+    lists:foreach(
+        fun(Idx) ->
+            {ok, _} = emqx_mcp_tools_sup:start_server(Idx, Conf)
+        end,
+        lists:seq(0, NumServerIds - 1)
+    ).
+
+stop_mcp_tool_servers() ->
+    emqx_mcp_tools_sup:stop_all_servers().
 
 on_config_changed(OldConfig, NewConfig) ->
     ok = gen_server:cast(?MODULE, {on_changed, OldConfig, NewConfig}).
@@ -79,7 +101,7 @@ handle_continue(start_mcp_tool_servers, State) ->
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 
-handle_cast({on_changed, _OldConfig, _NewConfig}, State) ->
+handle_cast({on_changed, _OldConfig, NewConfig}, State) ->
     ?SLOG(info, #{msg => "emqx_mcp_tools_config_changed",
                   old_config => _OldConfig,
                   new_config => NewConfig}),
@@ -98,34 +120,9 @@ terminate(_Reason, _State) ->
 %%==============================================================================
 %% Internal functions
 %%==============================================================================
-start_mcp_tool_servers(
-    Mod,
-    #{
-        <<"mqtt_broker">> := MqttBroker,
-        <<"num_server_ids">> := NumServerIds,
-        <<"mqtt_options">> := MqttOptions,
-    }
-) ->
-    BrokerAddress =
-        case MqttBroker of
-            <<"local">> -> local;
-            MqttBroker ->
-                case string:split(MqttBroker, ":") of
-                    [Host, Port] -> {Host, binary_to_integer(Port)};
-                    Host -> {Host, 1883}
-                end
-        end,
-    Conf = #{
-        broker_address => BrokerAddress,
-        callback_mod => Mod,
-        mqtt_options => MqttOptions
-    },
-    lists:foreach(
-        fun(Idx) ->
-            {ok, _} = emqx_mcp_tools_sup:start_server(Idx, Conf)
-        end,
-        lists:seq(0, NumServerIds - 1)
-    ).
-
-stop_mcp_tool_servers() ->
-    emqx_mcp_tools_sup:stop_all_servers().
+get_broker_address(<<"local">>) -> local;
+get_broker_address(MqttBroker) when is_binary(MqttBroker) ->
+    case string:split(MqttBroker, ":") of
+        [Host, Port] -> {Host, binary_to_integer(Port)};
+        Host -> {Host, 1883}
+    end.

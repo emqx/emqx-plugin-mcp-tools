@@ -122,7 +122,7 @@
     annotations => tool_annotations()
 }.
 
--type prompt_arguments() :: #{
+-type prompt_argument() :: #{
     name := binary(),
     description => binary(),
     required => boolean()
@@ -131,7 +131,7 @@
 -type prompt_def() :: #{
     name := binary(),
     description => binary(),
-    arguments => prompt_arguments()
+    arguments => [prompt_argument()]
 }.
 
 -type prompt_message() :: #{
@@ -145,7 +145,7 @@
 }.
 
 -type complete_result() :: #{
-    values := [string()] | [],
+    values := [binary()] | [],
     total => number(),
     hasMore => boolean()
 }.

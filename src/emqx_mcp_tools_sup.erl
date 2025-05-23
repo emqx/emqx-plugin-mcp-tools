@@ -21,25 +21,26 @@
 
 -export([init/1]).
 
+-define(SERVER_ID(MOD, INDEX), {server, MOD, INDEX}).
+
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
--spec start_server(Idx, mcp_mqtt_erl_server:config()) -> supervisor:startchild_ret().
+-spec start_server(integer(), mcp_mqtt_erl_server:config()) -> supervisor:startchild_ret().
 start_server(Idx, #{callback_mod := Mod} = Conf) ->
     supervisor:start_child(?MODULE, server_spec(Mod, Idx, Conf)).
 
 stop_all_servers() ->
     %% Stop all MCP servers
-    StartedServers = supervisor:which_children(?MODULE),
     lists:foreach(
         fun
-            ({emqx_mcp_tools, _Pid, _, _}) ->
-                ok;
-            ({_Id, Pid, _, _}) ->
-                _ = supervisor:terminate_child(?MODULE, Pid),
-                _ = supervisor:delete_child(?MODULE, Pid)
+            ({?SERVER_ID(_, _) = Id, _Pid, _, _}) ->
+                _ = supervisor:terminate_child(?MODULE, Id),
+                _ = supervisor:delete_child(?MODULE, Id);
+            ({_, _Pid, _, _}) ->
+                ok
         end,
-        StartedServers
+        supervisor:which_children(?MODULE)
     ).
 
 init([]) ->
@@ -60,8 +61,8 @@ init([]) ->
 
 server_spec(Mod, Idx, Conf) ->
     #{
-        id => {Mod, Idx},
-        start => {Mod, start_link, [Conf]},
+        id => ?SERVER_ID(Mod, Idx),
+        start => {Mod, start_link, [Idx, Conf]},
         restart => permanent,
         shutdown => 3_000,
         modules => [Mod],

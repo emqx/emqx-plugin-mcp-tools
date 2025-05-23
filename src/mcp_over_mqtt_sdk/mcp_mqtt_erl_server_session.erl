@@ -68,9 +68,12 @@
     _ => _
 }.
 
--type loop_data() :: term().
+-type loop_data() :: any().
 
 -callback server_name() -> binary().
+-callback server_instructions() -> binary().
+-callback server_meta() -> map().
+-callback server_id(integer()) -> binary() | random.
 -callback server_version() -> binary().
 -callback server_capabilities() -> map().
 
@@ -100,6 +103,7 @@ init(MqttClient, Mod, ServerId, _ClientInfo = #{
     ServerName = Mod:server_name(),
     ServerVsn = Mod:server_version(),
     ServerCapabilities = Mod:server_capabilities(),
+    ServerInstrunctions = Mod:server_instructions(),
     ServerInfo = #{<<"name">> => ServerName, <<"version">> => ServerVsn},
     maybe
         {ok, ClientParams} ?= verify_initialize_params(InitParams),
@@ -108,7 +112,7 @@ init(MqttClient, Mod, ServerId, _ClientInfo = #{
         }),
         %% send initialize response to client
         InitializeResp = mcp_mqtt_erl_msg:initialize_response(
-            ReqId, ServerInfo, ServerCapabilities
+            ReqId, ServerInfo, ServerCapabilities, ServerInstrunctions
         ),
         ok ?= mcp_mqtt_erl_msg:publish_mcp_server_message(
             MqttClient, ServerId, ServerName, McpClientId, rpc, #{}, InitializeResp
