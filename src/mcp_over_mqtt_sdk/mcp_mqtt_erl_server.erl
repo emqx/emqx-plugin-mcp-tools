@@ -31,6 +31,11 @@
     stop/1
 ]).
 
+-export([
+    send_request/3,
+    send_notification/2
+]).
+
 %% gen_statem callbacks
 -export([init/1, callback_mode/0, terminate/3, code_change/4]).
 
@@ -41,12 +46,13 @@
 
 -type state_name() :: idle | connected.
 
--type mcp_client_id() :: emqx_types:clientid().
--type mcp_server_config() :: #{_ => _}.
+-type mcp_client_id() :: binary().
+
 -type opts() :: #{
     mqtt_options => [emqtt:option()],
     atom() => term()
 }.
+
 -type config() :: #{
     callback_mod := module(),
     opts => opts()
@@ -61,7 +67,7 @@
 -type loop_data() :: #{
     callback_mod := module(),
     opts => opts(),
-    server_id := emqx_types:clientid(),
+    server_id := binary(),
     sessions => sessions()
 }.
 
@@ -108,11 +114,11 @@ start_link(Conf) ->
 stop(Pid) ->
     gen_statem:cast(Pid, stop).
 
--spec send_request(Pid, mcp_client_id(), server_request()) -> Reply :: term().
+-spec send_request(pid(), mcp_client_id(), server_request()) -> Reply :: term().
 send_request(Pid, TargetClient, Req) ->
     gen_statem:call(Pid, {server_request, TargetClient, Req}, {clean_timeout, ?REQUEST_TIMEOUT}).
 
--spec send_notification(Pid, server_notification()) -> ok().
+-spec send_notification(pid(), server_notification()) -> ok.
 send_notification(Pid, Notif) ->
     gen_statem:cast(Pid, {server_notif, Notif}).
 
@@ -162,20 +168,21 @@ connected(enter, OldState, _LoopData) ->
     ?log_enter_state(OldState),
     {keep_state_and_data, []};
 connected({call, Caller}, {server_request, TargetClient, Req}, #{sessions := Sessions} = LoopData) ->
-    case maps:find(McpClientId, Sessions) of
+    case maps:find(TargetClient, Sessions) of
         {ok, Session} ->
             case mcp_mqtt_erl_server_session:send_server_request(Session, Caller, Req) of
                 {ok, Session1} ->
-                    {keep_state, LoopData#{sessions => Sessions#{McpClientId => Session1}}};
+                    %% we will reply the caller in the session
+                    {keep_state, LoopData#{sessions => Sessions#{TargetClient => Session1}}};
                 {error, Reason} ->
                     ?SLOG(error, #{msg => send_server_request_error, reason => Reason}),
                     {keep_state, LoopData};
                 {terminated, Reason} ->
                     ?SLOG(warning, #{msg => session_terminated_on_send_server_request, reason => Reason}),
-                    {keep_state, LoopData#{sessions => maps:remove(McpClientId, Sessions)}}
+                    {keep_state, LoopData#{sessions => maps:remove(TargetClient, Sessions)}}
             end;
         error ->
-            ?SLOG(error, #{msg => send_server_request_failed, msg => session_not_found}),
+            ?SLOG(error, #{msg => send_server_request_failed, reason => session_not_found}),
             {keep_state, LoopData}
     end;
 connected(cast, {server_notif, Notif}, #{sessions := Sessions} = LoopData) ->
@@ -188,12 +195,13 @@ connected(info, {publish, #{topic := <<"$mcp-server/", _/binary>>, payload := Pa
         ServerId = maps:get(server_id, LoopData),
         {ok, McpClientId} ?= mcp_mqtt_erl_msg:get_mcp_client_id_from_mqtt_props(Props),
         {ok, mcp_client} ?= mcp_mqtt_erl_msg:get_mcp_component_type_from_mqtt_props(Props),
-        {ok, #{method := <<"initialize">>, id := Id, params := Params}} ?= mcp_mqtt_erl_msg:decode_rpc_msg(Payload),
+        {ok, #{method := <<"initialize">>, id := Id, params := Params}}
+            ?= mcp_mqtt_erl_msg:decode_rpc_msg(Payload),
         {ok, Sess} ?= mcp_mqtt_erl_server_session:init(
             MqttClient, Mod, ServerId,
             #{
                 mcp_clientid => McpClientId,
-                init_params => Params#{req_id => Id},
+                init_params => Params#{req_id => Id}
             }
         ),
         {keep_state, LoopData#{sessions => Sessions#{McpClientId => Sess}}, []}
@@ -208,11 +216,11 @@ connected(info, {publish, #{topic := <<"$mcp-server/", _/binary>>, payload := Pa
             ?SLOG(error, #{msg => invalid_initialize_msg, details => Msg, reason => Reason}),
             {keep_state, LoopData}
     end;
-connected(info, {publish, #{topic := <<"$mcp-client/presence/", McpClientId/binary>>}}, #{sessions := Sessions} = LoopData) ->
-    case emqx_mcp_message:decode_rpc_msg(PresenceMsg) of
+connected(info, {publish, #{topic := <<"$mcp-client/presence/", McpClientId/binary>>, payload := Payload}}, #{sessions := Sessions} = LoopData) ->
+    case emqx_mcp_message:decode_rpc_msg(Payload) of
         {ok, #{method := <<"notifications/disconnected">>}} ->
             ?SLOG(debug, #{msg => client_disconnected}),
-            {keep_state, LoopData#{sessions => maps:remove(McpClientId, Sessions)}}
+            {keep_state, LoopData#{sessions => maps:remove(McpClientId, Sessions)}};
         {ok, Msg} ->
             ?SLOG(error, #{msg => unsupported_client_presence_msg, rpc_msg => Msg}),
             {keep_state, LoopData};
@@ -220,7 +228,7 @@ connected(info, {publish, #{topic := <<"$mcp-client/presence/", McpClientId/bina
             ?SLOG(error, #{msg => decode_rpc_msg_failed, reason => Reason}),
             {keep_state, LoopData}
     end;
-connected(info, {publish, #{topic := <<"$mcp-client/capability/list-changed/", _/binary>>, payload := Payload}}, LoopData) ->
+connected(info, {publish, #{topic := <<"$mcp-client/capability/list-changed/", _/binary>>}}, LoopData) ->
     ?SLOG(error, #{msg => unimplemented_client_capability_list_changed}),
     {keep_state, LoopData};
 connected(info, {publish, #{topic := <<"$mcp-rpc-endpoint/", ClientIdAndServerName/binary>>, payload := Payload}}, #{sessions := Sessions} = LoopData) ->
@@ -244,7 +252,7 @@ connected(info, {publish, #{topic := <<"$mcp-rpc-endpoint/", ClientIdAndServerNa
                     {keep_state, LoopData}
             end;
         error ->
-            ?SLOG(error, #{msg => handle_rpc_failed, msg => session_not_found}),
+            ?SLOG(error, #{msg => handle_rpc_failed, reason => session_not_found}),
             {keep_state, LoopData}
     end;
 connected(info, {publish, #{topic := Topic}}, _LoopData) ->
@@ -269,7 +277,7 @@ connected(info, {rpc_request_timeout, McpClientId, ReqId}, #{sessions := Session
     end;
 ?handle_common.
 
-terminate(_Reason, connected, #{mqtt_client := MqttClient, server_id := ServerId} = LoopData) ->
+terminate(_Reason, connected, #{mqtt_client := MqttClient, server_id := ServerId, mod := Mod}) ->
     send_server_offline_message(MqttClient, Mod, ServerId);
 terminate(_Reason, _State, _LoopData) ->
     ok.
@@ -279,7 +287,7 @@ code_change(_OldVsn, State, LoopData, _Extra) ->
 
 handle_common(_State, state_timeout, TimeoutReason, _LoopData) ->
     shutdown(#{error => TimeoutReason});
-handle_common(_State, info, {'EXIT', MqttClient, Reason}, #{mqtt_client = MqttClient} = LoopData) ->
+handle_common(_State, info, {'EXIT', MqttClient, Reason}, #{mqtt_client := MqttClient}) ->
     ?SLOG(error, #{msg => mqtt_client_exit, reason => Reason}),
     shutdown(#{error => Reason});
 handle_common(_State, cast, stop, _LoopData) ->
@@ -316,7 +324,7 @@ send_server_online_notification(MqttClient, Mod, ServerId) ->
     ).
 
 send_server_offline_message(MqttClient, Mod, ServerId) ->
-    mcp_mqtt_erl_msg:send_server_offline_message(MqttClient, ServerId, Mod:server_name());
+    mcp_mqtt_erl_msg:send_server_offline_message(MqttClient, ServerId, Mod:server_name()).
 
 send_server_notification_to_all(Sessions, Notif) ->
     maps:fold(

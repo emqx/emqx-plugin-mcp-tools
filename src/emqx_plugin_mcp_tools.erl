@@ -24,7 +24,7 @@
 %% for logging
 -include_lib("emqx_plugin_helper/include/logger.hrl").
 -include("emqx_plugin_mcp_tools.hrl").
--include("emqx_mcp_errors.hrl").
+-include("mcp_mqtt_erl_errors.hrl").
 
 -export([
     get_config/0,

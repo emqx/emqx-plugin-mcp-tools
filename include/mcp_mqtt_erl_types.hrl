@@ -83,7 +83,7 @@
     data := binary(), %% base64-encoded-data
     mimeType := binary(),
     annotations => annotations()
-}
+}.
 
 -type embedded_resource() :: #{
     type := resource,
@@ -98,7 +98,7 @@
     properties => #{
         atom() => map()
     },
-    required => [atom()] | [],
+    required => [atom()] | []
 }.
 
 -type tool_annotations() :: #{

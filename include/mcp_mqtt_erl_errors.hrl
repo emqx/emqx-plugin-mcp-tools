@@ -8,6 +8,7 @@
 -define(ERR_UNEXPECTED_METHOD, unexpected_method).
 -define(ERR_REQUIRED_FILED_MISSING, required_filed_missing).
 -define(ERR_INVALID_CURSOR, invalid_cursor).
+-define(ERR_NOT_INITIALIZED, not_initialized).
 
 -define(ERR_C_NO_SERVER_AVAILABLE, 100).
 -define(ERR_C_TIMEOUT, 101).
@@ -19,6 +20,7 @@
 -define(ERR_C_UNEXPECTED_METHOD, 107).
 -define(ERR_C_REQUIRED_FILED_MISSING, 108).
 -define(ERR_C_INVALID_CURSOR, 109).
+-define(ERR_C_NOT_INITIALIZED, 110).
 
 -define(ERR_UNSUPPORTED_PROTOCOL_VERSION, unsupported_protocol_version).
 -define(ERR_C_UNSUPPORTED_PROTOCOL_VERSION, -32602).

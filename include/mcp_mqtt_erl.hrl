@@ -1,0 +1,3 @@
+-define(MCP_VERSION, "2025-03-26").
+-define(INIT_TIMEOUT, 5_000).
+-define(RPC_TIMEOUT, 5_000).

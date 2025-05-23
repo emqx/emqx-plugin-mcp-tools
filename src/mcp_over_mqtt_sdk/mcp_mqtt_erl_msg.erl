@@ -16,6 +16,7 @@
 
 -module(mcp_mqtt_erl_msg).
 -include("mcp_mqtt_erl_errors.hrl").
+-include("mcp_mqtt_erl.hrl").
 
 -export([
     json_rpc_request/3,
@@ -88,7 +89,7 @@ initialized_notification() ->
 %% JSON RPC Messages
 %%==============================================================================
 json_rpc_request(Id, Method, Params) ->
-    emqx_utils_json:encode(#{
+    json:encode(#{
         <<"jsonrpc">> => <<"2.0">>,
         <<"method">> => Method,
         <<"params">> => Params,
@@ -96,27 +97,27 @@ json_rpc_request(Id, Method, Params) ->
     }).
 
 json_rpc_response(Id, Result) ->
-    emqx_utils_json:encode(#{
+    json:encode(#{
         <<"jsonrpc">> => <<"2.0">>,
         <<"result">> => Result,
         <<"id">> => Id
     }).
 
 json_rpc_notification(Method) ->
-    emqx_utils_json:encode(#{
+    json:encode(#{
         <<"jsonrpc">> => <<"2.0">>,
         <<"method">> => Method
     }).
 
 json_rpc_notification(Method, Params) ->
-    emqx_utils_json:encode(#{
+    json:encode(#{
         <<"jsonrpc">> => <<"2.0">>,
         <<"method">> => Method,
         <<"params">> => Params
     }).
 
 json_rpc_error(Id, Code, Message, Data) ->
-    emqx_utils_json:encode(#{
+    json:encode(#{
         <<"jsonrpc">> => <<"2.0">>,
         <<"error">> => #{
             <<"code">> => Code,
@@ -127,7 +128,7 @@ json_rpc_error(Id, Code, Message, Data) ->
     }).
 
 decode_rpc_msg(Msg) ->
-    try emqx_utils_json:decode(Msg) of
+    try json:decode(Msg) of
         #{<<"jsonrpc">> := <<"2.0">>, <<"method">> := Method, <<"id">> := Id} = Msg1 ->
             Params = maps:get(<<"params">>, Msg1, #{}),
             {ok, #{type => json_rpc_request, method => Method, id => Id, params => Params}};
@@ -137,7 +138,7 @@ decode_rpc_msg(Msg) ->
             {ok, #{type => json_rpc_error, id => Id, error => Error}};
         #{<<"jsonrpc">> := <<"2.0">>, <<"method">> := Method} = Msg1 ->
             Params = maps:get(<<"params">>, Msg1, #{}),
-            {ok, #{type => json_rpc_notification, method => Method, params => Params}}
+            {ok, #{type => json_rpc_notification, method => Method, params => Params}};
         Msg1 ->
             {error, #{reason => ?ERR_MALFORMED_JSON_RPC, msg => Msg1}}
     catch
@@ -214,25 +215,25 @@ publish_mcp_server_message(MqttClient, ServerId, ServerName, McpClientId, TopicT
         ]
     },
     QoS = 1,
-    Result = emqtt:publish(MqttClient, Topic, PubProps, Payload, maps:to_list(Flags#{qos => 1})),
+    Result = emqtt:publish(MqttClient, Topic, PubProps, Payload, maps:to_list(Flags#{qos => QoS})),
     handle_pub_result(Result).
 
-get_mcp_component_type_from_mqtt_props(#{'User-Property' := UserProps} = Props) ->
+get_mcp_component_type_from_mqtt_props(#{'User-Property' := UserProps}) ->
     case lists:keyfind(<<"MCP-COMPONENT-TYPE">>, 1, UserProps) of
         {_, <<"mcp-server">>} -> {ok, mcp_server};
         {_, <<"mcp-client">>} -> {ok, mcp_client};
         {_, Type} -> {error, {invalid_mcp_component_type, Type}};
         _ -> {error, mcp_component_type_not_found}
     end;
-get_mcp_component_type_from_mqtt_props(Props) ->
+get_mcp_component_type_from_mqtt_props(_Props) ->
     {error, user_props_not_found}.
 
-get_mcp_client_id_from_mqtt_props(#{'User-Property' := UserProps} = Props) ->
+get_mcp_client_id_from_mqtt_props(#{'User-Property' := UserProps}) ->
     case lists:keyfind(<<"MCP-MQTT-CLIENT-ID">>, 1, UserProps) of
         {_, McpClientId} -> {ok, McpClientId};
         _ -> {error, mcp_client_id_not_found}
     end;
-get_mcp_client_id_from_mqtt_props(Props) ->
+get_mcp_client_id_from_mqtt_props(_Props) ->
     {error, user_props_not_found}.
 
 gen_mqtt_client_id() ->
@@ -240,9 +241,9 @@ gen_mqtt_client_id() ->
 
 handle_pub_result(ok) ->
     ok;
-handle_pub_result({ok, #{reason_code := ?RC_SUCCESS}}) ->
+handle_pub_result({ok, #{reason_code := 0}}) ->
     ok;
-handle_pub_result({ok, #{reason_code := ?RC_NO_MATCHING_SUBSCRIBERS}}) ->
+handle_pub_result({ok, #{reason_code := 16#10}}) ->
     {error, #{reason => no_matching_subscribers}};
 handle_pub_result({ok, Reply}) ->
     {error, classify_reply(Reply)};
