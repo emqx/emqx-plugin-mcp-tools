@@ -39,7 +39,6 @@
     state => created | initialized,
     client_info := map(),
     client_capabilities := map(),
-    next_req_id := integer(),
     server_id := binary(),
     server_name := binary(),
     mcp_client_id := binary(),
@@ -51,9 +50,9 @@
 -type mcp_client_info() :: #{
     mcp_clientid := binary(),
     init_params := #{
-        req_id := integer(),
         _ => _
-    }
+    },
+    req_id := any()
 }.
 
 -type pending_requests() :: #{
@@ -98,7 +97,8 @@
 -spec init(binary(), module(), binary(), mcp_client_info()) -> {ok, t()} | {error, error_details()}.
 init(MqttClient, Mod, ServerId, _ClientInfo = #{
     mcp_clientid := McpClientId,
-    init_params := #{req_id := ReqId} = InitParams
+    init_params := InitParams,
+    req_id := ReqId
 }) ->
     ServerName = Mod:server_name(),
     ServerVsn = Mod:server_version(),
@@ -117,7 +117,6 @@ init(MqttClient, Mod, ServerId, _ClientInfo = #{
         {ok, ClientParams#{
             state => created,
             mqtt_client => MqttClient,
-            next_req_id => 0,
             mod => Mod,
             server_id => ServerId,
             server_name => ServerName,
@@ -163,7 +162,7 @@ do_send_server_request(#{pending_requests := Pendings, timers := Timers, mcp_cli
     ok = publish_mcp_server_message(Session, rpc, #{}, Payload),
     Pendings1 = Pendings#{ReqId => #{mcp_msg_type => list_roots, timestamp => ts_now(), caller => Caller}},
     Timers1 = Timers#{ReqId => start_rpc_timer(McpClientId, ReqId)},
-    {ok, Session#{next_req_id => ReqId + 1, pending_requests => Pendings1, timers := Timers1}}.
+    {ok, Session#{pending_requests => Pendings1, timers := Timers1}}.
 
 send_server_notification(Session, #{method := Method} = Notif) ->
     Params = maps:get(params, Notif, #{}),
@@ -186,17 +185,17 @@ handle_json_rpc_error(#{pending_requests := Pendings0, timers := Timers} = Sessi
     case maps:take(ReqId, Pendings0) of
         {#{caller := Caller} = PendingReq, Pendings} ->
             {TRef, Timers1} = maps:take(ReqId, Timers),
-            erlang:cancel_timer(TRef),
+            _ = erlang:cancel_timer(TRef),
             Session1 = maybe_reply_to_caller(Session, Caller, PendingReq,
                 {error, #{reason => mcp_rpc_error, error_msg => ErrMsg}}),
             {ok, Session1#{pending_requests => Pendings, timers := Timers1}};
         {_, Pendings} ->
             {TRef, Timers1} = maps:take(ReqId, Timers),
-            erlang:cancel_timer(TRef),
+            _ = erlang:cancel_timer(TRef),
             ?SLOG(error, #{msg => no_caller_to_reply, id => ReqId}),
             {ok, Session#{pending_requests => Pendings, timers := Timers1}};
         error ->
-            ok
+            {terminated, #{reason => ?ERR_WRONG_RPC_ID}}
     end.
 
 handle_rpc_timeout(#{pending_requests := Pendings0, timers := Timers} = Session, ReqId) ->
@@ -208,7 +207,7 @@ handle_rpc_timeout(#{pending_requests := Pendings0, timers := Timers} = Session,
             ?SLOG(error, #{msg => no_caller_to_reply, id => ReqId}),
             {ok, Session#{pending_requests => Pendings, timers := maps:remove(ReqId, Timers)}};
         error ->
-            ok
+            {terminated, #{reason => ?ERR_WRONG_RPC_ID}}
     end.
 
 %%==============================================================================
@@ -386,28 +385,33 @@ handle_json_rpc_request(Session, <<"completion/complete">>, ReqId, #{
 handle_json_rpc_notification(Session, <<"notifications/initialized">>, _) ->
     {ok, Session#{state => initialized}};
 handle_json_rpc_notification(#{pending_requests := Pendings, timers := Timers} = Session, <<"notifications/roots/list_changed">>, _) ->
-    ReqId = maps:get(next_req_id, Session),
+    ReqId = list_to_binary(emqx_utils:gen_id()),
     McpClientId = maps:get(mcp_client_id, Session),
     ListRequest = mcp_mqtt_erl_msg:json_rpc_request(ReqId, <<"roots/list">>, #{}),
-    publish_mcp_server_message(Session, rpc, #{}, ListRequest),
-    Pendings1 = Pendings#{ReqId => #{mcp_msg_type => list_roots, timestamp => ts_now(), caller => no_caller}},
-    Timers1 = Timers#{ReqId => start_rpc_timer(McpClientId, ReqId)},
-    {ok, Session#{next_req_id => ReqId + 1, pending_requests => Pendings1, timers := Timers1}}.
+    case publish_mcp_server_message(Session, rpc, #{}, ListRequest) of
+        ok ->
+            Pendings1 = Pendings#{ReqId => #{mcp_msg_type => list_roots, timestamp => ts_now(), caller => no_caller}},
+            Timers1 = Timers#{ReqId => start_rpc_timer(McpClientId, ReqId)},
+            {ok, Session#{pending_requests => Pendings1, timers := Timers1}};
+        {error, _} = Err ->
+            ?SLOG(error, #{msg => send_root_list_failed, error => Err}),
+            {ok, Session}
+    end.
 
 handle_json_rpc_response(#{pending_requests := Pendings0, timers := Timers} = Session, ReqId, Result) ->
     case maps:take(ReqId, Pendings0) of
         {#{caller := Caller} = PendingReq, Pendings} ->
             {TRef, Timers1} = maps:take(ReqId, Timers),
-            erlang:cancel_timer(TRef),
+            _ = erlang:cancel_timer(TRef),
             Session1 = maybe_reply_to_caller(Session, Caller, PendingReq, {ok, Result}),
             {ok, Session1#{pending_requests => Pendings, timers := Timers1}};
         {_, Pendings} ->
             {TRef, Timers1} = maps:take(ReqId, Timers),
-            erlang:cancel_timer(TRef),
+            _ = erlang:cancel_timer(TRef),
             ?SLOG(error, #{msg => no_caller_to_reply, id => ReqId}),
             {ok, Session#{pending_requests => Pendings, timers := Timers1}};
         error ->
-            {error, #{reason => ?ERR_WRONG_SERVER_RESPONSE_ID}}
+            {terminated, #{reason => ?ERR_WRONG_RPC_ID}}
     end.
 
 %%==============================================================================

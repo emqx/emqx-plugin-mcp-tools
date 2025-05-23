@@ -3,7 +3,7 @@
     {vsn, "0.1.0"},
     {modules, []},
     {registered, [emqx_plugin_mcp_tools_sup]},
-    {applications, [kernel, stdlib, emqx_plugin_helper]},
+    {applications, [kernel, stdlib, emqtt, emqx_utils, emqx_plugin_helper]},
     {mod, {emqx_plugin_mcp_tools_app, []}},
     {env, []},
     {licenses, ["Apache-2.0"]},

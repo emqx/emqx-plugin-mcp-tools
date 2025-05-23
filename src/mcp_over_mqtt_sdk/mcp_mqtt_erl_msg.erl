@@ -183,8 +183,8 @@ get_topic(client_presence, #{mcp_clientid := McpClientId}) ->
     <<"$mcp-client/presence/", McpClientId/binary>>;
 get_topic(client_capability_list_changed, #{mcp_clientid := McpClientId}) ->
     <<"$mcp-client/capability/list-changed/", McpClientId/binary>>;
-get_topic(rpc, #{mcp_clientid := McpClientId, server_name := ServerName}) ->
-    <<"$mcp-rpc-endpoint/", McpClientId/binary, "/", ServerName/binary>>.
+get_topic(rpc, #{mcp_clientid := McpClientId, server_id := ServerId, server_name := ServerName}) ->
+    <<"$mcp-rpc-endpoint/", McpClientId/binary, "/", ServerId/binary, "/", ServerName/binary>>.
 
 send_server_online_message(MqttClient, ServerId, ServerName, ServerDesc, ServerMeta) ->
     Payload = json_rpc_notification(<<"notifications/server/online">>, #{
@@ -200,7 +200,7 @@ send_server_offline_message(MqttClient, ServerId, ServerName) ->
     publish_mcp_server_message(MqttClient, ServerId, ServerName, undefined, server_presence,
         #{retain => true}, <<>>).
 
--spec publish_mcp_server_message(MqttClient :: pid(), ServerId :: binary(), ServerName :: binary(), McpClientId :: binary(), topic_type(), flags(), Payload :: binary()) ->
+-spec publish_mcp_server_message(MqttClient :: pid(), ServerId :: binary(), ServerName :: binary(), McpClientId :: binary() | undefined, topic_type(), flags(), Payload :: binary()) ->
     ok | {error, #{reason := term(), _ => _}}.
 publish_mcp_server_message(MqttClient, ServerId, ServerName, McpClientId, TopicType, Flags, Payload) ->
     Topic = get_topic(TopicType, #{
@@ -237,7 +237,7 @@ get_mcp_client_id_from_mqtt_props(_Props) ->
     {error, user_props_not_found}.
 
 gen_mqtt_client_id() ->
-    emqx_utils:gen_id(8).
+    emqx_utils:gen_id().
 
 handle_pub_result(ok) ->
     ok;

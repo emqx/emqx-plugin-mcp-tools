@@ -3,6 +3,7 @@ deps
 *.o
 *.beam
 *.plt
+emqx_dialyzer_*
 erl_crash.dump
 ebin
 rel/example_project

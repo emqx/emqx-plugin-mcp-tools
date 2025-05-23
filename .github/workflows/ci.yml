@@ -60,5 +60,5 @@ jobs:
     - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
-        files: _build/default/emqx_plugrel/emqx_mcp_gateway-*.tar.gz
+        files: _build/default/emqx_plugrel/emqx_plugin_mcp_tools-*.tar.gz
         generate_release_notes: true

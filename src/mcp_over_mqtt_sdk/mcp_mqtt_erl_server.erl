@@ -50,8 +50,9 @@
 
 -type opts() :: #{
     mqtt_options => [emqtt:option()],
+    server_id => binary(),
     atom() => term()
-}.
+} | #{}.
 
 -type config() :: #{
     callback_mod := module(),
@@ -62,12 +63,12 @@
 
 -type sessions() :: #{
     mcp_client_id() => session()
-}.
+} | #{}.
 
 -type loop_data() :: #{
     callback_mod := module(),
-    opts => opts(),
     server_id := binary(),
+    mqtt_options => [emqtt:option()],
     sessions => sessions()
 }.
 
@@ -123,14 +124,15 @@ send_notification(Pid, Notif) ->
     gen_statem:cast(Pid, {server_notif, Notif}).
 
 %% gen_statem callbacks
--spec init(config()) ->
-    gen_statem:init_result(state_name(), loop_data()).
+-spec init(config()) -> {ok, state_name(), loop_data(), [gen_statem:action()]}.
 init(#{callback_mod := Mod} = Conf) ->
     process_flag(trap_exit, true),
+    Opts = maps:get(opts, Conf, #{}),
+    RandId = list_to_binary(mcp_mqtt_erl_msg:gen_mqtt_client_id()),
     LoopData = #{
         callback_mod => Mod,
-        server_id => mcp_mqtt_erl_msg:gen_mqtt_client_id(),
-        opts => maps:get(opts, Conf, #{}),
+        server_id => maps:get(server_id, Opts, RandId),
+        mqtt_options => maps:get(mqtt_options, Opts, #{}),
         sessions => #{}
     },
     {ok, idle, LoopData, [{next_event, internal, connect_broker}]}.
@@ -144,7 +146,7 @@ callback_mode() ->
 idle(enter, _OldState, _LoopData) ->
     {keep_state_and_data, []};
 idle(internal, connect_broker, #{callback_mod := Mod, server_id := ServerId} = LoopData) ->
-    MqttOpts = maps:get(mqtt_options, LoopData, #{}),
+    MqttOpts = maps:get(mqtt_options, LoopData),
     case emqtt:start_link(MqttOpts) of
         {ok, MqttClient} ->
             case emqtt:connect(MqttClient) of
@@ -195,13 +197,13 @@ connected(info, {publish, #{topic := <<"$mcp-server/", _/binary>>, payload := Pa
         ServerId = maps:get(server_id, LoopData),
         {ok, McpClientId} ?= mcp_mqtt_erl_msg:get_mcp_client_id_from_mqtt_props(Props),
         {ok, mcp_client} ?= mcp_mqtt_erl_msg:get_mcp_component_type_from_mqtt_props(Props),
-        {ok, #{method := <<"initialize">>, id := Id, params := Params}}
-            ?= mcp_mqtt_erl_msg:decode_rpc_msg(Payload),
+        {ok, #{method := <<"initialize">>, id := Id, params := Params}} ?= mcp_mqtt_erl_msg:decode_rpc_msg(Payload),
         {ok, Sess} ?= mcp_mqtt_erl_server_session:init(
             MqttClient, Mod, ServerId,
             #{
                 mcp_clientid => McpClientId,
-                init_params => Params#{req_id => Id}
+                init_params => Params,
+                req_id => Id
             }
         ),
         {keep_state, LoopData#{sessions => Sessions#{McpClientId => Sess}}, []}
@@ -217,7 +219,7 @@ connected(info, {publish, #{topic := <<"$mcp-server/", _/binary>>, payload := Pa
             {keep_state, LoopData}
     end;
 connected(info, {publish, #{topic := <<"$mcp-client/presence/", McpClientId/binary>>, payload := Payload}}, #{sessions := Sessions} = LoopData) ->
-    case emqx_mcp_message:decode_rpc_msg(Payload) of
+    case mcp_mqtt_erl_msg:decode_rpc_msg(Payload) of
         {ok, #{method := <<"notifications/disconnected">>}} ->
             ?SLOG(debug, #{msg => client_disconnected}),
             {keep_state, LoopData#{sessions => maps:remove(McpClientId, Sessions)}};
@@ -264,9 +266,6 @@ connected(info, {rpc_request_timeout, McpClientId, ReqId}, #{sessions := Session
             case mcp_mqtt_erl_server_session:handle_rpc_timeout(Session, ReqId) of
                 {ok, Session1} ->
                     {keep_state, LoopData#{sessions => Sessions#{McpClientId => Session1}}};
-                {error, Reason} ->
-                    ?SLOG(error, #{msg => handle_rpc_timeout_failed, reason => Reason}),
-                    {keep_state, LoopData};
                 {terminated, Reason} ->
                     ?SLOG(warning, #{msg => session_terminated_on_rpc_timeout, reason => Reason}),
                     {keep_state, LoopData#{sessions => maps:remove(McpClientId, Sessions)}}
@@ -329,19 +328,9 @@ send_server_offline_message(MqttClient, Mod, ServerId) ->
 send_server_notification_to_all(Sessions, Notif) ->
     maps:fold(
         fun(McpClientId, Session, Acc) ->
-            case mcp_mqtt_erl_server_session:send_server_notification(Session, Notif) of
-                {ok, Session1} ->
-                    Acc#{McpClientId => Session1};
-                {error, Reason} ->
-                    ?SLOG(error, #{msg => send_server_notification_failed, reason => Reason}),
-                    Acc#{McpClientId => Session};
-                {terminated, Reason} ->
-                    ?SLOG(warning, #{msg => session_terminated_on_send_server_notification, reason => Reason}),
-                    Acc
-            end
-        end,
-        #{},
-        Sessions
+            {ok, Session1} = mcp_mqtt_erl_server_session:send_server_notification(Session, Notif),
+            Acc#{McpClientId => Session1}
+        end, #{}, Sessions
     ).
 
 split_id_and_server_name(Str) ->

@@ -7,7 +7,7 @@ set -euo pipefail
 
 cd -P -- "$(dirname -- "$0")/../"
 
-PLUGIN="emqx_mcp_gateway"
+PLUGIN="emqx_plugin_mcp_tools"
 PLUGIN_VSN="$(grep -o 'plugin_rel_vsn, "[^"]*"' rebar.config | cut -d'"' -f2)"
 PLUGIN_NAME_VSN="$PLUGIN-$PLUGIN_VSN"
 

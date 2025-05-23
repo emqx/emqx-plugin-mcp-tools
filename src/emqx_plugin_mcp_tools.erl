@@ -66,14 +66,14 @@ start_link() ->
 
 init([]) ->
     erlang:process_flag(trap_exit, true),
-    ?SLOG(debug, #{msg => "emqx_mcp_gateway_started"}),
+    ?SLOG(debug, #{msg => "emqx_plugin_mcp_tools_started"}),
     {ok, #{}}.
 
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 
 handle_cast({on_changed, _OldConfig, _NewConfig}, State) ->
-    ?SLOG(info, #{msg => "emqx_mcp_gateway_config_changed", 
+    ?SLOG(info, #{msg => "emqx_plugin_mcp_tools_config_changed",
                   old_config => _OldConfig,
                   new_config => _NewConfig}),
     {noreply, State};
