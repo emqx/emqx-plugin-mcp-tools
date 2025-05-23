@@ -1,0 +1,36 @@
+{
+  "type": "record",
+  "name": "EmqxToolsConfig",
+  "fields": [
+    {
+      "name": "mqtt_broker",
+      "type": "string",
+      "default": "broker.emqx.io:1883",
+      "$ui": {
+        "component": "input",
+        "flex": 12,
+        "required": true,
+        "label": "$mqtt_broker_label",
+        "description": "$mqtt_broker_desc"
+      }
+    },
+    {
+      "name": "num_server_ids",
+      "type": "int",
+      "default": 4,
+      "$ui": {
+        "component": "input-number",
+        "flex": 6,
+        "required": true,
+        "label": "$num_server_ids_label",
+        "description": "$num_server_ids_desc",
+        "rules": [{
+          "type": "range",
+          "min": 1,
+          "max": 64,
+          "message": "$num_server_ids_validate_error"
+        }]
+      }
+    }
+  ]
+}

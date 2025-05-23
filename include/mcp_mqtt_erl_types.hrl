@@ -1,3 +1,9 @@
+-type client_params() :: #{
+    client_info := map(),
+    client_capabilities := map(),
+    mcp_client_id := binary()
+}.
+
 -type mcp_msg_type() :: mcp_server_sent_msg_type() | mcp_client_sent_msg_type() | mcp_common_msg_type().
 
 -type mcp_common_msg_type() ::

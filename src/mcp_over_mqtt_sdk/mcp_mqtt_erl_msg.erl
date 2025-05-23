@@ -179,11 +179,11 @@ get_topic(server_resources_updated, #{server_id := ServerId, server_name := Serv
     <<"$mcp-server/capability/resource-updated/", ServerId/binary, "/", ServerName/binary>>;
 get_topic(server_presence, #{server_id := ServerId, server_name := ServerName}) ->
     <<"$mcp-server/presence/", ServerId/binary, "/", ServerName/binary>>;
-get_topic(client_presence, #{mcp_clientid := McpClientId}) ->
+get_topic(client_presence, #{mcp_client_id := McpClientId}) ->
     <<"$mcp-client/presence/", McpClientId/binary>>;
-get_topic(client_capability_list_changed, #{mcp_clientid := McpClientId}) ->
+get_topic(client_capability_list_changed, #{mcp_client_id := McpClientId}) ->
     <<"$mcp-client/capability/list-changed/", McpClientId/binary>>;
-get_topic(rpc, #{mcp_clientid := McpClientId, server_id := ServerId, server_name := ServerName}) ->
+get_topic(rpc, #{mcp_client_id := McpClientId, server_id := ServerId, server_name := ServerName}) ->
     <<"$mcp-rpc-endpoint/", McpClientId/binary, "/", ServerId/binary, "/", ServerName/binary>>.
 
 send_server_online_message(MqttClient, ServerId, ServerName, ServerDesc, ServerMeta) ->
@@ -206,7 +206,7 @@ publish_mcp_server_message(MqttClient, ServerId, ServerName, McpClientId, TopicT
     Topic = get_topic(TopicType, #{
         server_id => ServerId,
         server_name => ServerName,
-        mcp_clientid => McpClientId
+        mcp_client_id => McpClientId
     }),
     PubProps = #{
         'User-Property' => [

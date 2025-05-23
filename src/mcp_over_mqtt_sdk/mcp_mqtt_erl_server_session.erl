@@ -48,7 +48,7 @@
 }.
 
 -type mcp_client_info() :: #{
-    mcp_clientid := binary(),
+    mcp_client_id := binary(),
     init_params := #{
         _ => _
     },
@@ -63,10 +63,6 @@
     }
 }.
 
--type client_params() :: #{
-    client_info := map(),
-    client_capabilities := map()
-}.
 -type error_details() :: #{
     reason := term(),
     _ => _
@@ -77,6 +73,7 @@
 -callback server_name() -> binary().
 -callback server_version() -> binary().
 -callback server_capabilities() -> map().
+
 -callback initialize(ServerId :: binary(), client_params()) -> {ok, loop_data()} | {error, error_response()}.
 -callback set_logging_level(LoggingLevel :: binary(), loop_data()) -> {ok, loop_data()} | {error, error_response()}.
 -callback list_resources(loop_data()) -> {ok, [resource_def()], loop_data()} | {error, error_response()}.
@@ -96,7 +93,7 @@
 
 -spec init(binary(), module(), binary(), mcp_client_info()) -> {ok, t()} | {error, error_details()}.
 init(MqttClient, Mod, ServerId, _ClientInfo = #{
-    mcp_clientid := McpClientId,
+    mcp_client_id := McpClientId,
     init_params := InitParams,
     req_id := ReqId
 }) ->
@@ -106,7 +103,9 @@ init(MqttClient, Mod, ServerId, _ClientInfo = #{
     ServerInfo = #{<<"name">> => ServerName, <<"version">> => ServerVsn},
     maybe
         {ok, ClientParams} ?= verify_initialize_params(InitParams),
-        {ok, LoopData} ?= Mod:initialize(ServerId, ClientParams),
+        {ok, LoopData} ?= Mod:initialize(ServerId, ClientParams#{
+            mcp_client_id => McpClientId
+        }),
         %% send initialize response to client
         InitializeResp = mcp_mqtt_erl_msg:initialize_response(
             ReqId, ServerInfo, ServerCapabilities
@@ -157,7 +156,7 @@ send_server_request(#{state := initialized} = Session, Caller, Req) ->
 send_server_request(Session, Caller, Req) ->
     maybe_reply_to_caller(Session, Caller, Req, {error, #{reason => ?ERR_NOT_INITIALIZED, request => Req}}).
 
-do_send_server_request(#{pending_requests := Pendings, timers := Timers, mcp_clientid := McpClientId} = Session, Caller, #{id := ReqId, method := Method, params := Params}) ->
+do_send_server_request(#{pending_requests := Pendings, timers := Timers, mcp_client_id := McpClientId} = Session, Caller, #{id := ReqId, method := Method, params := Params}) ->
     Payload = mcp_mqtt_erl_msg:json_rpc_request(ReqId, Method, Params),
     ok = publish_mcp_server_message(Session, rpc, #{}, Payload),
     Pendings1 = Pendings#{ReqId => #{mcp_msg_type => list_roots, timestamp => ts_now(), caller => Caller}},

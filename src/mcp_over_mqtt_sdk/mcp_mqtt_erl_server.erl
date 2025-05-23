@@ -25,10 +25,9 @@
 
 %% API
 -export([
-    start_supervised/1,
     start_link/1,
-    stop_supervised_all/0,
-    stop/1
+    stop/1,
+    process_name/2,
 ]).
 
 -export([
@@ -48,15 +47,10 @@
 
 -type mcp_client_id() :: binary().
 
--type opts() :: #{
-    mqtt_options => [emqtt:option()],
-    server_id => binary(),
-    atom() => term()
-} | #{}.
-
 -type config() :: #{
+    broker_address := {emqtt:host(), emqtt:port()} | local,
     callback_mod := module(),
-    opts => opts()
+    mqtt_options => map()
 }.
 
 -type session() :: mcp_mqtt_erl_server_session:t().
@@ -66,9 +60,10 @@
 } | #{}.
 
 -type loop_data() :: #{
-    callback_mod := module(),
     server_id := binary(),
-    mqtt_options => [emqtt:option()],
+    callback_mod := module(),
+    mqtt_options => map(),
+    mqtt_client => pid() | local,
     sessions => sessions()
 }.
 
@@ -94,26 +89,18 @@
 %%==============================================================================
 %% API
 %%==============================================================================
--spec start_supervised(config()) -> supervisor:startchild_ret().
-start_supervised(Conf) ->
-    mcp_mqtt_erl_server_sup:start_child(Conf).
-
-stop_supervised_all() ->
-    %% Stop all MCP servers
-    StartedServers = supervisor:which_children(mcp_mqtt_erl_server_sup),
-    lists:foreach(
-        fun({_Name, Pid, _, _}) ->
-            supervisor:terminate_child(mcp_mqtt_erl_server_sup, Pid)
-        end,
-        StartedServers
-    ).
-
--spec start_link(config()) -> gen_statem:start_ret().
-start_link(Conf) ->
-    gen_statem:start_link(?MODULE, Conf, []).
+-spec start_link(integer(), config()) -> gen_statem:start_ret().
+start_link(Idx, #{callback_mod := Mod} = Conf) ->
+    ServerName = Mod:server_name(),
+    RegisterName = process_name(ServerName, Idx),
+    ServerId = Mod:server_id(Idx),
+    gen_statem:start_link({local, RegisterName}, ?MODULE, Conf#{server_id => ServerId}, []).
 
 stop(Pid) ->
     gen_statem:cast(Pid, stop).
+
+process_name(ServerName, Idx) ->
+    binary_to_atom(<<ServerName/binary, ":", Idx/binary>>).
 
 -spec send_request(pid(), mcp_client_id(), server_request()) -> Reply :: term().
 send_request(Pid, TargetClient, Req) ->
@@ -125,17 +112,22 @@ send_notification(Pid, Notif) ->
 
 %% gen_statem callbacks
 -spec init(config()) -> {ok, state_name(), loop_data(), [gen_statem:action()]}.
-init(#{callback_mod := Mod} = Conf) ->
+init(#{server_id := ServerId, broker_address := BrokerAddr, callback_mod := Mod} = Conf) ->
     process_flag(trap_exit, true),
-    Opts = maps:get(opts, Conf, #{}),
     RandId = list_to_binary(mcp_mqtt_erl_msg:gen_mqtt_client_id()),
     LoopData = #{
         callback_mod => Mod,
-        server_id => maps:get(server_id, Opts, RandId),
-        mqtt_options => maps:get(mqtt_options, Opts, #{}),
         sessions => #{}
     },
-    {ok, idle, LoopData, [{next_event, internal, connect_broker}]}.
+    case BrokerAddr of
+        local ->
+            %% Local mode, no need to connect to MQTT broker
+            {ok, connected, LoopData#{mqtt_client => local}, []};
+        {Host, Port} ->
+            MqttOpts = maps:get(mqtt_options, Conf, #{}),
+            {ok, idle, LoopData#{mqtt_options => MqttOpts#{host => Host, port => Port}},
+                [{next_event, internal, connect_broker}]}
+    end.
 
 callback_mode() ->
     [state_functions, state_enter].
@@ -145,13 +137,12 @@ callback_mode() ->
     | gen_statem:event_handler_result(state_name(), loop_data()).
 idle(enter, _OldState, _LoopData) ->
     {keep_state_and_data, []};
-idle(internal, connect_broker, #{callback_mod := Mod, server_id := ServerId} = LoopData) ->
+idle(internal, connect_broker, #{callback_mod := Mod} = LoopData) ->
     MqttOpts = maps:get(mqtt_options, LoopData),
     case emqtt:start_link(MqttOpts) of
         {ok, MqttClient} ->
             case emqtt:connect(MqttClient) of
                 {ok, _} ->
-                    ok = send_server_online_notification(MqttClient, Mod, ServerId),
                     {next_state, connected, LoopData#{mqtt_client => MqttClient}};
                 {error, Reason} ->
                     ?SLOG(error, #{msg => connect_to_mqtt_broker_failed, reason => Reason}),
@@ -166,9 +157,10 @@ idle(internal, connect_broker, #{callback_mod := Mod, server_id := ServerId} = L
 -spec connected(enter | gen_statem:event_type(), state_name(), loop_data()) ->
     gen_statem:state_enter_result(state_name(), loop_data())
     | gen_statem:event_handler_result(state_name(), loop_data()).
-connected(enter, OldState, _LoopData) ->
+connected(enter, OldState, #{callback_mod := Mod, mqtt_client := MqttClient, server_id := ServerId}) ->
+    ok = send_server_online_notification(MqttClient, Mod, ServerId),
     ?log_enter_state(OldState),
-    {keep_state_and_data, []};
+    keep_state_and_data;
 connected({call, Caller}, {server_request, TargetClient, Req}, #{sessions := Sessions} = LoopData) ->
     case maps:find(TargetClient, Sessions) of
         {ok, Session} ->
@@ -201,7 +193,7 @@ connected(info, {publish, #{topic := <<"$mcp-server/", _/binary>>, payload := Pa
         {ok, Sess} ?= mcp_mqtt_erl_server_session:init(
             MqttClient, Mod, ServerId,
             #{
-                mcp_clientid => McpClientId,
+                mcp_client_id => McpClientId,
                 init_params => Params,
                 req_id => Id
             }

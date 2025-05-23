@@ -32,3 +32,4 @@ erlang_ls.config
 *#
 # For direnv
 .envrc
+tmp

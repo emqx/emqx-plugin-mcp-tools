@@ -13,14 +13,32 @@
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
 %%--------------------------------------------------------------------
--module(emqx_plugin_mcp_tools_cli).
+-module(emqx_mcp_tools_app).
 
-%% This is an example on how to extend `emqx ctl` with your own commands.
+-behaviour(application).
 
--export([cmd/1]).
+-emqx_plugin(?MODULE).
 
-cmd(["get-config"]) ->
-    Config = emqx_plugin_mcp_tools:get_config(),
-    emqx_ctl:print("~s~n", [emqx_utils_json:encode(Config)]);
-cmd(_) ->
-    emqx_ctl:usage([{"get-config", "get current config"}]).
+-export([
+    start/2,
+    stop/1
+]).
+
+-export([
+    on_config_changed/2,
+    on_health_check/1
+]).
+
+start(_StartType, _StartArgs) ->
+    {ok, Sup} = emqx_mcp_tools_sup:start_link(),
+    emqx_ctl:register_command(emqx_mcp_tools, {emqx_mcp_tools_cli, cmd}),
+    {ok, Sup}.
+
+stop(_State) ->
+    emqx_ctl:unregister_command(emqx_mcp_tools).
+
+on_config_changed(OldConfig, NewConfig) ->
+    emqx_mcp_tools:on_config_changed(OldConfig, NewConfig).
+
+on_health_check(Options) ->
+    emqx_mcp_tools:on_health_check(Options).

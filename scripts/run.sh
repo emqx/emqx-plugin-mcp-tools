@@ -7,7 +7,7 @@ set -euo pipefail
 
 cd -P -- "$(dirname -- "$0")/../"
 
-PLUGIN="emqx_plugin_mcp_tools"
+PLUGIN="emqx_mcp_tools"
 PLUGIN_VSN="$(grep -o 'plugin_rel_vsn, "[^"]*"' rebar.config | cut -d'"' -f2)"
 PLUGIN_NAME_VSN="$PLUGIN-$PLUGIN_VSN"
 
@@ -87,31 +87,16 @@ function run_emqx() {
 function copy_files() {
     local container="$1"
 
-    docker exec -t "$container" bash -c '\
+    docker exec -t "$container" bash -c "\
         mkdir -p /opt/emqx/plugins && \
-        mkdir -p /opt/emqx/data/plugins/$PLUGIN && \
-        mkdir -p /tmp/test_data'
+        mkdir -p /opt/emqx/data/plugins/$PLUGIN"
 
     docker cp "$(pwd)/_build/default/emqx_plugrel/." "$container:/opt/emqx/plugins"
-    docker cp "$(pwd)/test/config/." "$container:/opt/emqx/data/plugins/$PLUGIN"
-    docker cp "$(pwd)/test/data/." "$container:/tmp/test_data"
+    docker cp "$(pwd)/priv/." "$container:/opt/emqx/data/plugins/$PLUGIN"
 
-    docker exec -u root:root -t "$container" bash -c '\
+    docker exec -u root:root -t "$container" bash -c "\
         chown -R emqx:emqx /opt/emqx/plugins && \
-        chown -R emqx:emqx /opt/emqx/data/plugins/$PLUGIN && \
-        chown -R emqx:emqx /tmp/test_data'
-}
-
-init_python_env() {
-    local container="$1"
-
-    docker exec -t -u root:root "$container" bash -c '\
-        apt update && \
-        apt install python3-venv -y && \
-        python3 -m venv /tmp/venv-mcp && \
-        source /tmp/venv-mcp/bin/activate && \
-        python3 -m pip install --no-cache-dir --upgrade pip && \
-        python3 -m pip install "mcp[cli]"'
+        chown -R emqx:emqx /opt/emqx/data/plugins/$PLUGIN"
 }
 
 restart_plugin() {
@@ -124,15 +109,6 @@ restart_plugin() {
 
 run_emqx "$NODE1" "$NODE1" "core"
 run_emqx "$NODE2" "$NODE2" "core"
-
-copy_files "$NODE1"
-copy_files "$NODE2"
-
-init_python_env "$NODE1"
-init_python_env "$NODE2"
-
-restart_plugin "$NODE1"
-restart_plugin "$NODE2"
 
 mkdir -p tmp
 cat <<EOF > tmp/haproxy.cfg
@@ -231,6 +207,12 @@ wait_for_running_nodes() {
 
 wait_for_emqx "$NODE1" 60
 wait_for_emqx "$NODE2" 30
+
+copy_files "$NODE1"
+copy_files "$NODE2"
+
+restart_plugin "$NODE1"
+restart_plugin "$NODE2"
 
 echo
 

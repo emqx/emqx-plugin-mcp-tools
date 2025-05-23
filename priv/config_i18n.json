@@ -1,0 +1,22 @@
+{
+  "$mqtt_broker_label": {
+    "zh": "MQTT Broker",
+    "en": "MQTT Broker"
+  },
+  "$mqtt_broker_desc": {
+    "zh": "远程 MQTT Broker 的主机名和端口号，格式为：主机名:端口号。主机名通常是一个域名或者 IP 地址，例如 www.example.com，而端口号通常是 1883 或 8883。若端口未指定，则默认为 1883。",
+    "en": "The hostname and port number of the remote MQTT Broker, in the format: hostname:port. The hostname is usually a domain name or IP address, such as www.example.com, while the port number is usually 1883 or 8883. If the port is not specified, it defaults to 1883."
+  },
+  "$num_server_ids_label": {
+    "zh": "MCP Server ID 数量",
+    "en": "Number of MCP server Ids"
+  },
+  "$num_server_ids_desc": {
+    "zh": "MCP Server ID 的数量，范围为 1 到 64。",
+    "en": "The number of MCP server Ids, ranging from 1 to 64."
+  },
+  "$num_server_ids_validate_error": {
+    "zh": "MCP Server ID 数量必须在 1 到 64 之间。",
+    "en": "The number of MCP server Ids must be between 1 and 64."
+  }
+}

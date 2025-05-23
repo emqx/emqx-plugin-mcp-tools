@@ -14,7 +14,7 @@
 %% limitations under the License.
 %%--------------------------------------------------------------------
 
--module(emqx_plugin_mcp_tools).
+-module(emqx_mcp_tools).
 -behaviour(gen_server).
 
 %% for #message{} record
@@ -23,7 +23,7 @@
 -include_lib("emqx_plugin_helper/include/emqx_hooks.hrl").
 %% for logging
 -include_lib("emqx_plugin_helper/include/logger.hrl").
--include("emqx_plugin_mcp_tools.hrl").
+-include("emqx_mcp_tools.hrl").
 -include("mcp_mqtt_erl_errors.hrl").
 
 -export([
@@ -35,11 +35,14 @@
 -export([
     start_link/0,
     init/1,
+    handle_continue/2,
     handle_call/3,
     handle_cast/2,
     handle_info/2,
     terminate/2
 ]).
+
+-define(?CB_MOD, emqx_mcp_tools_server).
 
 %%==============================================================================
 %% Config update
@@ -53,7 +56,7 @@ on_config_changed(OldConfig, NewConfig) ->
 on_health_check(_Options) ->
     case whereis(?MODULE) of
         undefined ->
-            {error, <<"emqx_plugin_mcp_tools is not running">>};
+            {error, <<"emqx_mcp_tools is not running">>};
         _ ->
             ok
     end.
@@ -66,16 +69,22 @@ start_link() ->
 
 init([]) ->
     erlang:process_flag(trap_exit, true),
-    ?SLOG(debug, #{msg => "emqx_plugin_mcp_tools_started"}),
-    {ok, #{}}.
+    ?SLOG(debug, #{msg => "emqx_mcp_tools_started"}),
+    {ok, #{}, {continue, start_mcp_tool_servers}}.
+
+handle_continue(start_mcp_tool_servers, State) ->
+    ok = start_mcp_tool_servers(?CB_MOD, get_config()),
+    {noreply, State}.
 
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 
 handle_cast({on_changed, _OldConfig, _NewConfig}, State) ->
-    ?SLOG(info, #{msg => "emqx_plugin_mcp_tools_config_changed",
+    ?SLOG(info, #{msg => "emqx_mcp_tools_config_changed",
                   old_config => _OldConfig,
-                  new_config => _NewConfig}),
+                  new_config => NewConfig}),
+    ok = stop_mcp_tool_servers(),
+    ok = start_mcp_tool_servers(?CB_MOD, NewConfig),
     {noreply, State};
 handle_cast(_Request, State) ->
     {noreply, State}.
@@ -89,3 +98,34 @@ terminate(_Reason, _State) ->
 %%==============================================================================
 %% Internal functions
 %%==============================================================================
+start_mcp_tool_servers(
+    Mod,
+    #{
+        <<"mqtt_broker">> := MqttBroker,
+        <<"num_server_ids">> := NumServerIds,
+        <<"mqtt_options">> := MqttOptions,
+    }
+) ->
+    BrokerAddress =
+        case MqttBroker of
+            <<"local">> -> local;
+            MqttBroker ->
+                case string:split(MqttBroker, ":") of
+                    [Host, Port] -> {Host, binary_to_integer(Port)};
+                    Host -> {Host, 1883}
+                end
+        end,
+    Conf = #{
+        broker_address => BrokerAddress,
+        callback_mod => Mod,
+        mqtt_options => MqttOptions
+    },
+    lists:foreach(
+        fun(Idx) ->
+            {ok, _} = emqx_mcp_tools_sup:start_server(Idx, Conf)
+        end,
+        lists:seq(0, NumServerIds - 1)
+    ).
+
+stop_mcp_tool_servers() ->
+    emqx_mcp_tools_sup:stop_all_servers().

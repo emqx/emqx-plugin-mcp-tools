@@ -13,25 +13,43 @@
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
 %%--------------------------------------------------------------------
--module(emqx_plugin_mcp_tools_sup).
+-module(emqx_mcp_tools_sup).
 
 -behaviour(supervisor).
 
--export([start_link/0]).
+-export([start_link/0, start_server/2, stop_all_servers/0]).
 
 -export([init/1]).
 
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
+-spec start_server(Idx, mcp_mqtt_erl_server:config()) -> supervisor:startchild_ret().
+start_server(Idx, #{callback_mod := Mod} = Conf) ->
+    supervisor:start_child(?MODULE, server_spec(Mod, Idx, Conf)).
+
+stop_all_servers() ->
+    %% Stop all MCP servers
+    StartedServers = supervisor:which_children(?MODULE),
+    lists:foreach(
+        fun
+            ({emqx_mcp_tools, _Pid, _, _}) ->
+                ok;
+            ({_Id, Pid, _, _}) ->
+                _ = supervisor:terminate_child(?MODULE, Pid),
+                _ = supervisor:delete_child(?MODULE, Pid)
+        end,
+        StartedServers
+    ).
+
 init([]) ->
     ConfigChildSpec = #{
-        id => emqx_plugin_mcp_tools,
-        start => {emqx_plugin_mcp_tools, start_link, []},
+        id => emqx_mcp_tools,
+        start => {emqx_mcp_tools, start_link, []},
         restart => permanent,
         shutdown => 5000,
         type => worker,
-        modules => [emqx_plugin_mcp_tools]
+        modules => [emqx_mcp_tools]
     },
     SupFlags = #{
         strategy => one_for_all,
@@ -39,3 +57,13 @@ init([]) ->
         period => 10
     },
     {ok, {SupFlags, [ConfigChildSpec]}}.
+
+server_spec(Mod, Idx, Conf) ->
+    #{
+        id => {Mod, Idx},
+        start => {Mod, start_link, [Conf]},
+        restart => permanent,
+        shutdown => 3_000,
+        modules => [Mod],
+        type => worker
+    }.
