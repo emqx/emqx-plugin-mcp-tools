@@ -17,7 +17,7 @@
     {
       "name": "num_server_ids",
       "type": "int",
-      "default": 4,
+      "default": 1,
       "$ui": {
         "component": "input-number",
         "flex": 6,

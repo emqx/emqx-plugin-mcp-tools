@@ -29,17 +29,21 @@
 -export([
     initialize_request/2,
     initialize_request/3,
-    initialize_response/4,
+    initialize_response/5,
     initialized_notification/0
 ]).
 
 -export([decode_rpc_msg/1, topic_type_of_rpc_msg/1, get_topic/2]).
 
 -export([
+    subscribe_server_control_topic/3,
+    subscribe_topic/3,
     send_server_online_message/5,
     send_server_offline_message/3,
     publish_mcp_server_message/7
 ]).
+
+-export([validate_server_id/1]).
 
 -export([get_mcp_component_type_from_mqtt_props/1,
          get_mcp_client_id_from_mqtt_props/1]).
@@ -64,17 +68,17 @@ initialize_request(Id, ClientInfo, Capabilities) ->
         Id,
         <<"initialize">>,
         #{
-            <<"protocolVersion">> => <<?MCP_VERSION>>,
+            <<"protocolVersion">> => ?MCP_VERSION,
             <<"clientInfo">> => ClientInfo,
             <<"capabilities">> => Capabilities
         }
     ).
 
-initialize_response(Id, ServerInfo, Capabilities, Instructions) ->
+initialize_response(Id, ProtoVsn, ServerInfo, Capabilities, Instructions) ->
     json_rpc_response(
         Id,
         #{
-            <<"protocolVersion">> => <<?MCP_VERSION>>,
+            <<"protocolVersion">> => ProtoVsn,
             <<"serverInfo">> => ServerInfo,
             <<"capabilities">> => Capabilities,
             <<"instructions">> => Instructions
@@ -185,19 +189,33 @@ get_topic(client_capability_list_changed, #{mcp_client_id := McpClientId}) ->
 get_topic(rpc, #{mcp_client_id := McpClientId, server_id := ServerId, server_name := ServerName}) ->
     <<"$mcp-rpc-endpoint/", McpClientId/binary, "/", ServerId/binary, "/", ServerName/binary>>.
 
+subscribe_server_control_topic(MqttClient, ServerId, ServerName) ->
+    Topic = get_topic(server_control, #{server_id => ServerId, server_name => ServerName}),
+    subscribe_topic(MqttClient, Topic, #{qos => 1}).
+
+subscribe_topic(local, Topic, SubOpts) ->
+    emqx:subscribe(Topic, SubOpts);
+subscribe_topic(MqttClient, Topic, SubOpts) ->
+    case emqtt:subscribe(MqttClient, Topic, maps:to_list(SubOpts)) of
+        {ok, _Props, _} -> ok;
+        {error, _} = Err -> Err
+    end.
+
 send_server_online_message(MqttClient, ServerId, ServerName, ServerDesc, ServerMeta) ->
     Payload = json_rpc_notification(<<"notifications/server/online">>, #{
         <<"server_name">> => ServerName,
         <<"description">> => ServerDesc,
         <<"meta">> => ServerMeta
     }),
-    publish_mcp_server_message(MqttClient, ServerId, ServerName, undefined, server_presence,
-        #{retain => true}, Payload).
+    Result = publish_mcp_server_message(MqttClient, ServerId, ServerName, undefined, server_presence,
+            #{retain => true}, Payload),
+    ok_if_no_subscribers(Result).
 
 send_server_offline_message(MqttClient, ServerId, ServerName) ->
     %% Empty payload for offline message
-    publish_mcp_server_message(MqttClient, ServerId, ServerName, undefined, server_presence,
-        #{retain => true}, <<>>).
+    Result = publish_mcp_server_message(MqttClient, ServerId, ServerName, undefined, server_presence,
+        #{retain => true}, <<>>),
+    ok_if_no_subscribers(Result).
 
 -spec publish_mcp_server_message(MqttClient :: pid() | local, ServerId :: binary(), ServerName :: binary(), McpClientId :: binary() | undefined, topic_type(), flags(), Payload :: binary()) ->
     ok | {error, #{reason := term(), _ => _}}.
@@ -244,6 +262,12 @@ get_mcp_component_type_from_mqtt_props(#{'User-Property' := UserProps}) ->
 get_mcp_component_type_from_mqtt_props(_Props) ->
     {error, user_props_not_found}.
 
+validate_server_id(ServerId) when is_binary(ServerId) ->
+    case string:find(ServerId, <<"/">>) =:= nomatch of
+        true -> ServerId;
+        false -> throw({invalid_server_id, ServerId})
+    end.
+
 get_mcp_client_id_from_mqtt_props(#{'User-Property' := UserProps}) ->
     case lists:keyfind(<<"MCP-MQTT-CLIENT-ID">>, 1, UserProps) of
         {_, McpClientId} -> {ok, McpClientId};
@@ -252,6 +276,7 @@ get_mcp_client_id_from_mqtt_props(#{'User-Property' := UserProps}) ->
 get_mcp_client_id_from_mqtt_props(_Props) ->
     {error, user_props_not_found}.
 
+%%==============================================================================
 handle_pub_result(ok) ->
     ok;
 handle_pub_result({ok, #{reason_code := 0}}) ->
@@ -278,3 +303,7 @@ classify_error(shutdown) ->
     #{reason => disconnected};
 classify_error(Reason) ->
     #{reason => Reason}.
+
+ok_if_no_subscribers(ok) -> ok;
+ok_if_no_subscribers({error, #{reason := no_matching_subscribers}}) -> ok;
+ok_if_no_subscribers({error, _} = Err) -> Err.

@@ -66,9 +66,10 @@ server_name() ->
     <<"emqx_tools/info_apis">>.
 
 server_id(Idx) ->
-    Name = server_name(),
+    Name = <<"emqx_tool_info_apis">>,
     Idx1 = integer_to_binary(Idx),
-    <<Name/binary, ":", Idx1/binary>>.
+    Node = atom_to_binary(node()),
+    <<Name/binary, ":", Node/binary, ":", Idx1/binary>>.
 
 server_capabilities() ->
     #{

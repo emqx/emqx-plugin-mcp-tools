@@ -31,6 +31,7 @@
 
 start(_StartType, _StartArgs) ->
     {ok, Sup} = emqx_mcp_tools_sup:start_link(),
+    emqx_mcp_tools:start_mcp_tool_servers(),
     emqx_ctl:register_command(emqx_mcp_tools, {emqx_mcp_tools_cli, cmd}),
     {ok, Sup}.
 

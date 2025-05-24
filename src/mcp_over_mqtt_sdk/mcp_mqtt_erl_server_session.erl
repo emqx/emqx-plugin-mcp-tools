@@ -36,15 +36,16 @@
 
 -type t() :: #{
     mod := module(),
-    state => created | initialized,
+    state := created | initialized,
+    protocol_version := binary(),
     client_info := map(),
     client_capabilities := map(),
     server_id := binary(),
     server_name := binary(),
     mcp_client_id := binary(),
-    client_roots => [map()],
-    loop_data => map(),
-    pending_requests => pending_requests()
+    loop_data := map(),
+    pending_requests := pending_requests(),
+    client_roots => [map()]
 }.
 
 -type mcp_client_info() :: #{
@@ -106,14 +107,20 @@ init(MqttClient, Mod, ServerId, _ClientInfo = #{
     ServerInstrunctions = Mod:server_instructions(),
     ServerInfo = #{<<"name">> => ServerName, <<"version">> => ServerVsn},
     maybe
-        {ok, ClientParams} ?= verify_initialize_params(InitParams),
+        {ok, #{protocol_version := ProtoVsn} = ClientParams} ?= verify_initialize_params(InitParams),
         {ok, LoopData} ?= Mod:initialize(ServerId, ClientParams#{
             mcp_client_id => McpClientId
         }),
         %% send initialize response to client
         InitializeResp = mcp_mqtt_erl_msg:initialize_response(
-            ReqId, ServerInfo, ServerCapabilities, ServerInstrunctions
+            ReqId, ProtoVsn, ServerInfo, ServerCapabilities, ServerInstrunctions
         ),
+        Info = #{
+            mcp_client_id => McpClientId,
+            server_id => ServerId,
+            server_name => ServerName
+        },
+        ok = subscribe_session_topics(MqttClient, Info),
         ok ?= mcp_mqtt_erl_msg:publish_mcp_server_message(
             MqttClient, ServerId, ServerName, McpClientId, rpc, #{}, InitializeResp
         ),
@@ -128,30 +135,27 @@ init(MqttClient, Mod, ServerId, _ClientInfo = #{
             pending_requests => #{}
         }}
     else
-        {error, #{reason := Reason}} = Err when
-                Reason == missing_capabilities;
-                Reason == missing_client_info;
-                Reason == missing_protocol_version ->
-            ErrResult = mcp_mqtt_erl_msg:json_rpc_error(ReqId, ?ERR_C_REQUIRED_FILED_MISSING, Reason, #{}),
-            ok = mcp_mqtt_erl_msg:publish_mcp_server_message(
-                MqttClient, ServerId, ServerName, McpClientId, rpc, #{}, ErrResult
-            ),
-            Err;
+        {error, #{reason := ?ERR_REQUIRED_FILED_MISSING, required_fields := RequiredF}} = Err ->
+            ErrResult = mcp_mqtt_erl_msg:json_rpc_error(ReqId, ?ERR_C_REQUIRED_FILED_MISSING, <<"Required field(s) missing">>, #{required_fields => RequiredF}),
+            try_publish_mcp_server_message(MqttClient, ServerId, ServerName, McpClientId, rpc, #{}, ErrResult, Err);
         {error, #{reason := ?ERR_UNSUPPORTED_PROTOCOL_VERSION, vsn := Vsn}} = Err ->
-            ErrResult = mcp_mqtt_erl_msg:json_rpc_error(ReqId, ?ERR_C_UNSUPPORTED_PROTOCOL_VERSION, <<"Unsupported protocol version">>, #{<<"requested">> => Vsn, <<"supported">> => [?MCP_VERSION]}),
-            ok = mcp_mqtt_erl_msg:publish_mcp_server_message(
-                MqttClient, ServerId, ServerName, McpClientId, rpc, #{}, ErrResult
-            ),
-            Err;
+            ErrResult = mcp_mqtt_erl_msg:json_rpc_error(ReqId, ?ERR_C_UNSUPPORTED_PROTOCOL_VERSION, <<"Unsupported protocol version">>, #{<<"requested">> => Vsn, <<"supported">> => ?SUPPORTED_MCP_VERSIONS}),
+            try_publish_mcp_server_message(MqttClient, ServerId, ServerName, McpClientId, rpc, #{}, ErrResult, Err);
         {error, #{code := ErrCode, message := ErrMsg, data := ErrData} = Error} ->
             ErrResult = mcp_mqtt_erl_msg:json_rpc_error(ReqId, ErrCode, ErrMsg, ErrData),
-            ok = mcp_mqtt_erl_msg:publish_mcp_server_message(
-                MqttClient, ServerId, ServerName, McpClientId, rpc, #{}, ErrResult
-            ),
-            {error, Error#{reason => callback_mod_replies_an_error}};
+            Err = {error, Error#{reason => callback_mod_replies_an_error}},
+            try_publish_mcp_server_message(MqttClient, ServerId, ServerName, McpClientId, rpc, #{}, ErrResult, Err);
         {error, _} = Err ->
             Err
     end.
+
+subscribe_session_topics(MqttClient, Info) ->
+    ClientCapaTopic = mcp_mqtt_erl_msg:get_topic(client_capability_list_changed, Info),
+    ClientPresenceTopic = mcp_mqtt_erl_msg:get_topic(client_presence, Info),
+    RpcTopic = mcp_mqtt_erl_msg:get_topic(rpc, Info),
+    ok = mcp_mqtt_erl_msg:subscribe_topic(MqttClient, ClientCapaTopic, #{qos => 1}),
+    ok = mcp_mqtt_erl_msg:subscribe_topic(MqttClient, ClientPresenceTopic, #{qos => 1}),
+    ok = mcp_mqtt_erl_msg:subscribe_topic(MqttClient, RpcTopic, #{qos => 1, nl => true}).
 
 send_server_request(Session, Caller, #{method := <<"ping">>} = Req) ->
     do_send_server_request(Session, Caller, Req);
@@ -162,16 +166,23 @@ send_server_request(Session, Caller, Req) ->
 
 do_send_server_request(#{pending_requests := Pendings, timers := Timers, mcp_client_id := McpClientId} = Session, Caller, #{id := ReqId, method := Method, params := Params}) ->
     Payload = mcp_mqtt_erl_msg:json_rpc_request(ReqId, Method, Params),
-    ok = publish_mcp_server_message(Session, rpc, #{}, Payload),
-    Pendings1 = Pendings#{ReqId => #{mcp_msg_type => list_roots, timestamp => ts_now(), caller => Caller}},
-    Timers1 = Timers#{ReqId => start_rpc_timer(McpClientId, ReqId)},
-    {ok, Session#{pending_requests => Pendings1, timers := Timers1}}.
+    case publish_mcp_server_message(Session, rpc, #{}, Payload) of
+        ok ->
+            Pendings1 = Pendings#{ReqId => #{mcp_msg_type => list_roots, timestamp => ts_now(), caller => Caller}},
+            Timers1 = Timers#{ReqId => start_rpc_timer(McpClientId, ReqId)},
+            {ok, Session#{pending_requests => Pendings1, timers := Timers1}};
+        {error, _} = Err ->
+            Err
+    end.
 
 send_server_notification(Session, #{method := Method} = Notif) ->
     Params = maps:get(params, Notif, #{}),
     Payload = mcp_mqtt_erl_msg:json_rpc_notification(Method, Params),
-    ok = publish_mcp_server_message(Session, rpc, #{}, Payload),
-    {ok, Session}.
+    case publish_mcp_server_message(Session, rpc, #{}, Payload) of
+        ok -> {ok, Session};
+        {error, #{reason := no_matching_subscribers}} -> {ok, Session};
+        {error, _} = Err -> Err
+    end.
 
 handle_rpc_msg(Session, #{type := json_rpc_request, method := Method, id := ReqId, params := Params}) ->
     handle_rpc_request_and_send_response(Session, Method, ReqId, Params);
@@ -217,22 +228,13 @@ handle_rpc_timeout(#{pending_requests := Pendings0, timers := Timers} = Session,
 %% Handle JSON-RPC requests/responses/notifications
 %%==============================================================================
 handle_rpc_request_and_send_response(Session, Method, ReqId, Params) ->
-    MqttClient = maps:get(mqtt_client, Session),
-    ServerId = maps:get(server_id, Session),
-    ServerName = maps:get(server_name, Session),
-    McpClientId = maps:get(mcp_client_id, Session),
     case handle_json_rpc_request(Session, Method, ReqId, Params) of
         {ok, Result, Session1} ->
-            ok = mcp_mqtt_erl_msg:publish_mcp_server_message(
-                MqttClient, ServerId, ServerName, McpClientId, rpc, #{}, Result
-            ),
-            {ok, Session1};
+            try_publish_mcp_server_message(Session, rpc, #{}, Result, {ok, Session1});
         {error, #{code := ErrCode, message := ErrMsg, data := ErrData}} ->
             ErrResult = mcp_mqtt_erl_msg:json_rpc_error(ReqId, ErrCode, ErrMsg, ErrData),
-            ok = mcp_mqtt_erl_msg:publish_mcp_server_message(
-                MqttClient, ServerId, ServerName, McpClientId, rpc, #{}, ErrResult
-            ),
-            {error, #{reason => ErrMsg, method => Method, id => ReqId}}
+            Err = {error, #{reason => ErrMsg, method => Method, id => ReqId}},
+            try_publish_mcp_server_message(Session, rpc, #{}, ErrResult, Err)
     end.
 
 handle_json_rpc_request(Session, <<"ping">>, ReqId, _) ->
@@ -429,25 +431,41 @@ publish_mcp_server_message(Session, TopicType, Flags, Payload) ->
         MqttClient, ServerId, ServerName, McpClientId, TopicType, Flags, Payload
     ).
 
-verify_initialize_params(#{<<"protocolVersion">> := <<?MCP_VERSION>>} = Params) ->
-    case maps:find(<<"clientInfo">>, Params) of
-        {ok, ClientInfo} ->
-            case maps:find(<<"capabilities">>, Params) of
-                {ok, Capabilities} ->
-                    {ok, #{
-                        client_info => ClientInfo,
-                        client_capabilities => Capabilities
-                    }};
-                error ->
-                    {error, #{reason => missing_capabilities}}
-            end;
+try_publish_mcp_server_message(Session, TopicType, Flags, Payload, ReturnVal) ->
+    MqttClient = maps:get(mqtt_client, Session),
+    ServerId = maps:get(server_id, Session),
+    ServerName = maps:get(server_name, Session),
+    McpClientId = maps:get(mcp_client_id, Session),
+    try_publish_mcp_server_message(MqttClient, ServerId, ServerName, McpClientId, TopicType, Flags, Payload, ReturnVal).
+
+try_publish_mcp_server_message(MqttClient, ServerId, ServerName, McpClientId, TopicType, Flags, Payload, ReturnVal) ->
+    maybe
+        ok ?= mcp_mqtt_erl_msg:publish_mcp_server_message(
+            MqttClient, ServerId, ServerName, McpClientId, TopicType, Flags, Payload
+        ),
+        ReturnVal
+    end.
+
+verify_initialize_params(#{<<"protocolVersion">> := Vsn} = Params) ->
+    maybe
+        {ok, Vsn} ?= maps:find(<<"protocolVersion">>, Params),
+        true ?= lists:member(Vsn, ?SUPPORTED_MCP_VERSIONS),
+        {ok, ClientInfo} ?= maps:find(<<"clientInfo">>, Params),
+        {ok, Capabilities} ?= maps:find(<<"capabilities">>, Params),
+        {ok, #{
+            protocol_version => Vsn,
+            client_info => ClientInfo,
+            client_capabilities => Capabilities
+        }}
+    else
+        false ->
+            {error, #{reason => ?ERR_UNSUPPORTED_PROTOCOL_VERSION, vsn => Vsn}};
         error ->
-            {error, #{reason => missing_client_info}}
-    end;
-verify_initialize_params(#{<<"protocolVersion">> := Vsn}) ->
-    {error, #{reason => ?ERR_UNSUPPORTED_PROTOCOL_VERSION, vsn => Vsn}};
-verify_initialize_params(_Params) ->
-    {error, #{reason => missing_protocol_version}}.
+            {error, #{
+                reason => ?ERR_REQUIRED_FILED_MISSING,
+                required_fields => [<<"protocolVersion">>, <<"clientInfo">>, <<"capabilities">>]
+            }}
+    end.
 
 maybe_reply_to_caller(Session, no_caller, #{mcp_msg_type := list_roots}, {ok, Result}) ->
     Session#{client_roots => Result};

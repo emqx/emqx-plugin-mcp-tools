@@ -28,6 +28,7 @@
 
 -export([
     get_config/0,
+    start_mcp_tool_servers/0,
     start_mcp_tool_servers/2,
     stop_mcp_tool_servers/0,
     on_config_changed/2,
@@ -37,7 +38,6 @@
 -export([
     start_link/0,
     init/1,
-    handle_continue/2,
     handle_call/3,
     handle_cast/2,
     handle_info/2,
@@ -46,14 +46,19 @@
 
 -define(CB_MOD, emqx_mcp_tools_server).
 
--dialyzer({nowarn_function, [get_config/0, handle_continue/2]}).
+-dialyzer({nowarn_function, [get_config/0]}).
 %%==============================================================================
 %% Config update
 %%==============================================================================
 get_config() ->
     emqx_plugin_helper:get_config(?PLUGIN_NAME_VSN).
 
+start_mcp_tool_servers() ->
+    start_mcp_tool_servers(?CB_MOD, get_config()).
+
 start_mcp_tool_servers(Mod, Config) ->
+    ?SLOG(info, #{msg => start_mcp_tool_servers, mod => Mod,
+        config => Config, pid => self(), group_leader => group_leader()}),
     MqttBroker = maps:get(<<"mqtt_broker">>, Config, <<"local">>),
     NumServerIds = maps:get(<<"num_server_ids">>, Config, 1),
     MqttOptions = maps:get(<<"mqtt_options">>, Config, #{}),
@@ -92,17 +97,13 @@ start_link() ->
 init([]) ->
     erlang:process_flag(trap_exit, true),
     ?SLOG(debug, #{msg => "emqx_mcp_tools_started"}),
-    {ok, #{}, {continue, start_mcp_tool_servers}}.
-
-handle_continue(start_mcp_tool_servers, State) ->
-    ok = start_mcp_tool_servers(?CB_MOD, get_config()),
-    {noreply, State}.
+    {ok, #{}}.
 
 handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 
 handle_cast({on_changed, _OldConfig, NewConfig}, State) ->
-    ?SLOG(info, #{msg => "emqx_mcp_tools_config_changed",
+    ?SLOG(info, #{msg => emqx_mcp_tools_config_changed,
                   old_config => _OldConfig,
                   new_config => NewConfig}),
     ok = stop_mcp_tool_servers(),

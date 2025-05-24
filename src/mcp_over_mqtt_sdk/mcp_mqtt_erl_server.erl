@@ -63,6 +63,7 @@
 
 -type loop_data() :: #{
     server_id := binary(),
+    server_name := binary(),
     callback_mod := module(),
     mqtt_options => map(),
     mqtt_client => pid() | local,
@@ -87,6 +88,7 @@
     ?SLOG(debug, #{msg => enter_state, state => ?FUNCTION_NAME, previous => OldState})
 ).
 -define(REQUEST_TIMEOUT, 15_000).
+-define(T_RECONN, 3_000).
 
 %%==============================================================================
 %% API
@@ -118,14 +120,16 @@ send_notification(Pid, Notif) ->
     {ok, state_name(), loop_data(), [gen_statem:action()]}.
 init({Idx, BrokerAddr, Mod, MqttOpts}) ->
     process_flag(trap_exit, true),
+    ServerName = Mod:server_name(),
     ServerId =
         case Mod:server_id(Idx) of
             random -> list_to_binary(emqx_utils:gen_id());
-            Id -> Id
+            Id -> mcp_mqtt_erl_msg:validate_server_id(Id)
         end,
     LoopData = #{
         callback_mod => Mod,
         server_id => ServerId,
+        server_name => ServerName,
         sessions => #{}
     },
     case BrokerAddr of
@@ -133,7 +137,14 @@ init({Idx, BrokerAddr, Mod, MqttOpts}) ->
             %% Local mode, no need to connect to MQTT broker
             {ok, connected, LoopData#{mqtt_client => local}, []};
         {Host, Port} ->
-            {ok, idle, LoopData#{mqtt_options => MqttOpts#{host => Host, port => Port}},
+            WillTopic = mcp_mqtt_erl_msg:get_topic(server_presence,
+                #{server_id => ServerId, server_name => ServerName}),
+            MqttOpts1 = MqttOpts#{
+                host => Host, port => Port, proto_ver => v5, clientid => ServerId,
+                will_topic => WillTopic, will_payload => <<>>, will_retain => true,
+                will_qos => 1, clean_start => true
+            },
+            {ok, idle, LoopData#{mqtt_options => MqttOpts1},
                 [{next_event, internal, connect_broker}]}
     end.
 
@@ -146,27 +157,21 @@ callback_mode() ->
 idle(enter, _OldState, _LoopData) ->
     {keep_state_and_data, []};
 idle(internal, connect_broker, LoopData) ->
-    MqttOpts = maps:get(mqtt_options, LoopData),
-    case emqtt:start_link(MqttOpts) of
-        {ok, MqttClient} ->
-            case emqtt:connect(MqttClient) of
-                {ok, _} ->
-                    {next_state, connected, LoopData#{mqtt_client => MqttClient}};
-                {error, Reason} ->
-                    ?SLOG(error, #{msg => connect_to_mqtt_broker_failed, reason => Reason}),
-                    shutdown(#{error => Reason})
-            end;
-        {error, Reason} ->
-            ?SLOG(error, #{msg => start_emqtt_failed, reason => Reason}),
-            shutdown(#{error => Reason})
-    end;
+    connect_broker(LoopData);
+idle(state_timeout, connect_broker, LoopData) ->
+    connect_broker(LoopData);
 ?handle_common.
 
 -spec connected(enter | gen_statem:event_type(), state_name(), loop_data()) ->
     gen_statem:state_enter_result(state_name(), loop_data())
     | gen_statem:event_handler_result(state_name(), loop_data()).
-connected(enter, OldState, #{callback_mod := Mod, mqtt_client := MqttClient, server_id := ServerId}) ->
-    ok = send_server_online_notification(MqttClient, Mod, ServerId),
+connected(enter, OldState, #{callback_mod := Mod, mqtt_client := MqttClient, server_id := ServerId, server_name := ServerName}) ->
+    ok = mcp_mqtt_erl_msg:subscribe_server_control_topic(MqttClient, ServerId, ServerName),
+    ok = mcp_mqtt_erl_msg:send_server_online_message(
+        MqttClient, ServerId, ServerName,
+        Mod:server_instructions(),
+        Mod:server_meta()
+    ),
     ?log_enter_state(OldState),
     keep_state_and_data;
 connected({call, Caller}, {server_request, TargetClient, Req}, #{sessions := Sessions} = LoopData) ->
@@ -191,7 +196,7 @@ connected(cast, {server_notif, Notif}, #{sessions := Sessions} = LoopData) ->
     Sessions1 = send_server_notification_to_all(Sessions, Notif),
     {keep_state, LoopData#{sessions => Sessions1}};
 
-connected(info, {publish, #{topic := <<"$mcp-server/", _/binary>>, payload := Payload, properties := Props} = Msg}, #{mod := Mod, mqtt_client := MqttClient} = LoopData) ->
+connected(info, {publish, #{topic := <<"$mcp-server/", _/binary>>, payload := Payload, properties := Props} = Msg}, #{callback_mod := Mod, mqtt_client := MqttClient} = LoopData) ->
     maybe
         Sessions = maps:get(sessions, LoopData),
         ServerId = maps:get(server_id, LoopData),
@@ -237,7 +242,7 @@ connected(info, {publish, #{topic := <<"$mcp-rpc-endpoint/", ClientIdAndServerNa
     {McpClientId, _} = split_id_and_server_name(ClientIdAndServerName),
     case maps:find(McpClientId, Sessions) of
         {ok, Session} ->
-            case emqx_mcp_message:decode_rpc_msg(Payload) of
+            case mcp_mqtt_erl_msg:decode_rpc_msg(Payload) of
                 {ok, Msg} ->
                     case mcp_mqtt_erl_server_session:handle_rpc_msg(Session, Msg) of
                         {ok, Session1} ->
@@ -276,8 +281,8 @@ connected(info, {rpc_request_timeout, McpClientId, ReqId}, #{sessions := Session
     end;
 ?handle_common.
 
-terminate(_Reason, connected, #{mqtt_client := MqttClient, server_id := ServerId, mod := Mod}) ->
-    send_server_offline_message(MqttClient, Mod, ServerId);
+terminate(_Reason, connected, #{mqtt_client := MqttClient, server_id := ServerId, callback_mod := Mod}) ->
+    _ = send_server_offline_message(MqttClient, Mod, ServerId);
 terminate(_Reason, _State, _LoopData) ->
     ok.
 
@@ -310,18 +315,43 @@ shutdown(#{error := Error} = ErrObj, Actions) ->
     ?SLOG(warning, ErrObj#{msg => shutdown}),
     {stop, {shutdown, Error}, Actions}.
 
+-define(WONT_RETRY_ERR(Reason),
+    Reason =:= protocol_error;
+    Reason =:= unsupported_protocol_version;
+    Reason =:= bad_username_or_password;
+    Reason =:= not_authorized;
+    Reason =:= bad_authentication_method;
+    Reason =:= topic_name_invalid;
+    Reason =:= retain_not_supported;
+    Reason =:= qos_not_supported
+).
+connect_broker(#{mqtt_options := MqttOpts} = LoopData) ->
+    case emqtt:start_link(MqttOpts) of
+        {ok, MqttClient} ->
+            IsLocalhost = is_localhost(maps:get(host, MqttOpts)),
+            case emqtt:connect(MqttClient) of
+                {ok, _} ->
+                    {next_state, connected, LoopData#{mqtt_client => MqttClient}};
+                {error, {not_authorized, _Prop}} when IsLocalhost ->
+                    %% Somethimes the authentication components has not been loaded yet,
+                    %% so we retry to connect to the localhost broker on not_authorized error.
+                    ?SLOG(warning, #{msg => retry_connect_to_localhost_broker, reason => not_authorized}),
+                    {keep_state, LoopData, [{state_timeout, ?T_RECONN, connect_broker}]};
+                {error, {Reason, _Prop}} when ?WONT_RETRY_ERR(Reason) ->
+                    ?SLOG(error, #{msg => shutdown_on_connect_broker_failed, reason => Reason}),
+                    shutdown(#{error => Reason});
+                {error, Reason} ->
+                    ?SLOG(error, #{msg => connect_broker_failed, reason => Reason}),
+                    {keep_state, LoopData, [{state_timeout, ?T_RECONN, connect_broker}]}
+            end;
+        {error, Reason} ->
+            ?SLOG(error, #{msg => start_emqtt_failed, reason => Reason}),
+            shutdown(#{error => Reason})
+    end.
+
 %%==============================================================================
 %% Internal functions
 %%==============================================================================
-send_server_online_notification(MqttClient, Mod, ServerId) ->
-    mcp_mqtt_erl_msg:send_server_online_message(
-        MqttClient,
-        ServerId,
-        Mod:server_name(),
-        Mod:server_instructions(),
-        Mod:server_meta()
-    ).
-
 send_server_offline_message(MqttClient, Mod, ServerId) ->
     mcp_mqtt_erl_msg:send_server_offline_message(MqttClient, ServerId, Mod:server_name()).
 
@@ -339,3 +369,8 @@ split_id_and_server_name(Str) ->
         [Id, ServerName] -> {Id, ServerName};
         _ -> throw({error, {invalid_id_and_server_name, Str}})
     end.
+
+is_localhost(<<"localhost">>) -> true;
+is_localhost(<<"127.0.0.", _/binary>>) -> true;
+is_localhost(<<"::1">>) -> true;
+is_localhost(_Host) -> false.

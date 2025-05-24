@@ -53,8 +53,8 @@ init([]) ->
         modules => [emqx_mcp_tools]
     },
     SupFlags = #{
-        strategy => one_for_all,
-        intensity => 100,
+        strategy => one_for_one,
+        intensity => 5,
         period => 10
     },
     {ok, {SupFlags, [ConfigChildSpec]}}.
