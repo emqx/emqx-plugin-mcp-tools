@@ -83,9 +83,10 @@
     | resource_list_changed
     | tool_list_changed.
 
+-define(LOG_T(LEVEL, REPORT), ?SLOG(LEVEL, maps:put(tag, "MCP_SERVER", REPORT))).
 -define(handle_common, ?FUNCTION_NAME(T, C, D) -> handle_common(?FUNCTION_NAME, T, C, D)).
 -define(log_enter_state(OldState),
-    ?SLOG(debug, #{msg => enter_state, state => ?FUNCTION_NAME, previous => OldState})
+    ?LOG_T(debug, #{msg => enter_state, state => ?FUNCTION_NAME, previous => OldState})
 ).
 -define(REQUEST_TIMEOUT, 15_000).
 -define(T_RECONN, 3_000).
@@ -182,14 +183,14 @@ connected({call, Caller}, {server_request, TargetClient, Req}, #{sessions := Ses
                     %% we will reply the caller in the session
                     {keep_state, LoopData#{sessions => Sessions#{TargetClient => Session1}}};
                 {error, Reason} ->
-                    ?SLOG(error, #{msg => send_server_request_error, reason => Reason}),
+                    ?LOG_T(error, #{msg => send_server_request_error, reason => Reason}),
                     {keep_state, LoopData};
                 {terminated, Reason} ->
-                    ?SLOG(warning, #{msg => session_terminated_on_send_server_request, reason => Reason}),
+                    ?LOG_T(warning, #{msg => session_terminated_on_send_server_request, reason => Reason}),
                     {keep_state, LoopData#{sessions => maps:remove(TargetClient, Sessions)}}
             end;
         error ->
-            ?SLOG(error, #{msg => send_server_request_failed, reason => session_not_found}),
+            ?LOG_T(error, #{msg => send_server_request_failed, reason => session_not_found}),
             {keep_state, LoopData}
     end;
 connected(cast, {server_notif, Notif}, #{sessions := Sessions} = LoopData) ->
@@ -214,29 +215,29 @@ connected(info, {publish, #{topic := <<"$mcp-server/", _/binary>>, payload := Pa
         {keep_state, LoopData#{sessions => Sessions#{McpClientId => Sess}}, []}
     else
         {ok, RpcMsg} ->
-            ?SLOG(debug, #{msg => unexpected_rpc_msg, details => RpcMsg}),
+            ?LOG_T(debug, #{msg => unexpected_rpc_msg, details => RpcMsg}),
             {keep_state, LoopData};
         {error, #{reason := ?ERR_INVALID_JSON}} ->
-            ?SLOG(error, #{msg => non_json_msg, details => Msg}),
+            ?LOG_T(error, #{msg => non_json_msg, details => Msg}),
             {keep_state, LoopData};
         {error, Reason} ->
-            ?SLOG(error, #{msg => invalid_initialize_msg, details => Msg, reason => Reason}),
+            ?LOG_T(error, #{msg => invalid_initialize_msg, details => Msg, reason => Reason}),
             {keep_state, LoopData}
     end;
 connected(info, {publish, #{topic := <<"$mcp-client/presence/", McpClientId/binary>>, payload := Payload}}, #{sessions := Sessions} = LoopData) ->
     case mcp_mqtt_erl_msg:decode_rpc_msg(Payload) of
         {ok, #{method := <<"notifications/disconnected">>}} ->
-            ?SLOG(debug, #{msg => client_disconnected}),
+            ?LOG_T(debug, #{msg => remove_session, reason => client_disconnected}),
             {keep_state, LoopData#{sessions => maps:remove(McpClientId, Sessions)}};
         {ok, Msg} ->
-            ?SLOG(error, #{msg => unsupported_client_presence_msg, rpc_msg => Msg}),
+            ?LOG_T(error, #{msg => unsupported_client_presence_msg, rpc_msg => Msg}),
             {keep_state, LoopData};
         {error, Reason} ->
-            ?SLOG(error, #{msg => decode_rpc_msg_failed, reason => Reason}),
+            ?LOG_T(error, #{msg => decode_rpc_msg_failed, reason => Reason}),
             {keep_state, LoopData}
     end;
 connected(info, {publish, #{topic := <<"$mcp-client/capability/list-changed/", _/binary>>}}, LoopData) ->
-    ?SLOG(error, #{msg => unimplemented_client_capability_list_changed}),
+    ?LOG_T(error, #{msg => unimplemented_client_capability_list_changed}),
     {keep_state, LoopData};
 connected(info, {publish, #{topic := <<"$mcp-rpc-endpoint/", ClientIdAndServerName/binary>>, payload := Payload}}, #{sessions := Sessions} = LoopData) ->
     {McpClientId, _} = split_id_and_server_name(ClientIdAndServerName),
@@ -248,22 +249,22 @@ connected(info, {publish, #{topic := <<"$mcp-rpc-endpoint/", ClientIdAndServerNa
                         {ok, Session1} ->
                             {keep_state, LoopData#{sessions => Sessions#{McpClientId => Session1}}};
                         {error, Reason} ->
-                            ?SLOG(error, #{msg => handle_rpc_msg_failed, reason => Reason}),
+                            ?LOG_T(error, #{msg => handle_rpc_msg_failed, reason => Reason}),
                             {keep_state, LoopData};
                         {terminated, Reason} ->
-                            ?SLOG(warning, #{msg => session_terminated_on_rpc_msg, reason => Reason}),
+                            ?LOG_T(warning, #{msg => session_terminated_on_rpc_msg, reason => Reason}),
                             {keep_state, LoopData#{sessions => maps:remove(McpClientId, Sessions)}}
                     end;
                 {error, Reason} ->
-                    ?SLOG(error, #{msg => decode_rpc_msg_failed, reason => Reason}),
+                    ?LOG_T(error, #{msg => decode_rpc_msg_failed, reason => Reason}),
                     {keep_state, LoopData}
             end;
         error ->
-            ?SLOG(error, #{msg => handle_rpc_failed, reason => session_not_found}),
+            ?LOG_T(error, #{msg => handle_rpc_failed, reason => session_not_found}),
             {keep_state, LoopData}
     end;
 connected(info, {publish, #{topic := Topic}}, _LoopData) ->
-    ?SLOG(error, #{msg => unsupported_topic, topic => Topic}),
+    ?LOG_T(error, #{msg => unsupported_topic, topic => Topic}),
     keep_state_and_data;
 connected(info, {rpc_request_timeout, McpClientId, ReqId}, #{sessions := Sessions} = LoopData) ->
     case maps:find(McpClientId, Sessions) of
@@ -272,11 +273,11 @@ connected(info, {rpc_request_timeout, McpClientId, ReqId}, #{sessions := Session
                 {ok, Session1} ->
                     {keep_state, LoopData#{sessions => Sessions#{McpClientId => Session1}}};
                 {terminated, Reason} ->
-                    ?SLOG(warning, #{msg => session_terminated_on_rpc_timeout, reason => Reason}),
+                    ?LOG_T(warning, #{msg => session_terminated_on_rpc_timeout, reason => Reason}),
                     {keep_state, LoopData#{sessions => maps:remove(McpClientId, Sessions)}}
             end;
         error ->
-            ?SLOG(error, #{msg => handle_rpc_timeout_failed, reason => session_not_found}),
+            ?LOG_T(error, #{msg => handle_rpc_timeout_failed, reason => session_not_found}),
             {keep_state, LoopData}
     end;
 ?handle_common.
@@ -292,13 +293,13 @@ code_change(_OldVsn, State, LoopData, _Extra) ->
 handle_common(_State, state_timeout, TimeoutReason, _LoopData) ->
     shutdown(#{error => TimeoutReason});
 handle_common(_State, info, {'EXIT', MqttClient, Reason}, #{mqtt_client := MqttClient}) ->
-    ?SLOG(error, #{msg => mqtt_client_exit, reason => Reason}),
+    ?LOG_T(error, #{msg => mqtt_client_exit, reason => Reason}),
     shutdown(#{error => Reason});
 handle_common(_State, cast, stop, _LoopData) ->
-    ?SLOG(debug, #{msg => stop}),
+    ?LOG_T(debug, #{msg => stop}),
     shutdown(#{error => normal});
 handle_common(State, EventType, EventContent, _LoopData) ->
-    ?SLOG(error, #{
+    ?LOG_T(error, #{
         msg => unexpected_msg,
         state => State,
         event_type => EventType,
@@ -312,7 +313,7 @@ shutdown(ErrObj) ->
 shutdown(#{error := normal}, Actions) ->
     {stop, normal, Actions};
 shutdown(#{error := Error} = ErrObj, Actions) ->
-    ?SLOG(warning, ErrObj#{msg => shutdown}),
+    ?LOG_T(warning, ErrObj#{msg => shutdown}),
     {stop, {shutdown, Error}, Actions}.
 
 -define(WONT_RETRY_ERR(Reason),
@@ -335,17 +336,17 @@ connect_broker(#{mqtt_options := MqttOpts} = LoopData) ->
                 {error, {not_authorized, _Prop}} when IsLocalhost ->
                     %% Somethimes the authentication components has not been loaded yet,
                     %% so we retry to connect to the localhost broker on not_authorized error.
-                    ?SLOG(warning, #{msg => retry_connect_to_localhost_broker, reason => not_authorized}),
+                    ?LOG_T(warning, #{msg => retry_connect_to_localhost_broker, reason => not_authorized}),
                     {keep_state, LoopData, [{state_timeout, ?T_RECONN, connect_broker}]};
                 {error, {Reason, _Prop}} when ?WONT_RETRY_ERR(Reason) ->
-                    ?SLOG(error, #{msg => shutdown_on_connect_broker_failed, reason => Reason}),
+                    ?LOG_T(error, #{msg => shutdown_on_connect_broker_failed, reason => Reason}),
                     shutdown(#{error => Reason});
                 {error, Reason} ->
-                    ?SLOG(error, #{msg => connect_broker_failed, reason => Reason}),
+                    ?LOG_T(error, #{msg => connect_broker_failed, reason => Reason}),
                     {keep_state, LoopData, [{state_timeout, ?T_RECONN, connect_broker}]}
             end;
         {error, Reason} ->
-            ?SLOG(error, #{msg => start_emqtt_failed, reason => Reason}),
+            ?LOG_T(error, #{msg => start_emqtt_failed, reason => Reason}),
             shutdown(#{error => Reason})
     end.
 

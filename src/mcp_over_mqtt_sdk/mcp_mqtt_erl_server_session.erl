@@ -94,6 +94,7 @@
     {ok, complete_result(), loop_data()} | {error, error_response()}.
 
 -define(MAX_PAGE_SIZE, 10).
+-define(LOG_T(LEVEL, REPORT), ?SLOG(LEVEL, maps:put(tag, "MCP_SERVER_SESSION", REPORT))).
 
 -spec init(binary(), module(), binary(), mcp_client_info()) -> {ok, t()} | {error, error_details()}.
 init(MqttClient, Mod, ServerId, _ClientInfo = #{
@@ -206,7 +207,7 @@ handle_json_rpc_error(#{pending_requests := Pendings0, timers := Timers} = Sessi
         {_, Pendings} ->
             {TRef, Timers1} = maps:take(ReqId, Timers),
             _ = erlang:cancel_timer(TRef),
-            ?SLOG(error, #{msg => no_caller_to_reply, id => ReqId}),
+            ?LOG_T(error, #{msg => no_caller_to_reply, id => ReqId}),
             {ok, Session#{pending_requests => Pendings, timers := Timers1}};
         error ->
             {terminated, #{reason => ?ERR_WRONG_RPC_ID}}
@@ -218,7 +219,7 @@ handle_rpc_timeout(#{pending_requests := Pendings0, timers := Timers} = Session,
             gen_statem:reply(Caller, {error, #{reason => ?ERR_TIMEOUT}}),
             {ok, Session#{pending_requests => Pendings, timers := maps:remove(ReqId, Timers)}};
         {_, Pendings} ->
-            ?SLOG(error, #{msg => no_caller_to_reply, id => ReqId}),
+            ?LOG_T(error, #{msg => no_caller_to_reply, id => ReqId}),
             {ok, Session#{pending_requests => Pendings, timers := maps:remove(ReqId, Timers)}};
         error ->
             {terminated, #{reason => ?ERR_WRONG_RPC_ID}}
@@ -399,7 +400,7 @@ handle_json_rpc_notification(#{pending_requests := Pendings, timers := Timers} =
             Timers1 = Timers#{ReqId => start_rpc_timer(McpClientId, ReqId)},
             {ok, Session#{pending_requests => Pendings1, timers := Timers1}};
         {error, _} = Err ->
-            ?SLOG(error, #{msg => send_root_list_failed, error => Err}),
+            ?LOG_T(error, #{msg => send_root_list_failed, error => Err}),
             {ok, Session}
     end.
 
@@ -413,7 +414,7 @@ handle_json_rpc_response(#{pending_requests := Pendings0, timers := Timers} = Se
         {_, Pendings} ->
             {TRef, Timers1} = maps:take(ReqId, Timers),
             _ = erlang:cancel_timer(TRef),
-            ?SLOG(error, #{msg => no_caller_to_reply, id => ReqId}),
+            ?LOG_T(error, #{msg => no_caller_to_reply, id => ReqId}),
             {ok, Session#{pending_requests => Pendings, timers := Timers1}};
         error ->
             {terminated, #{reason => ?ERR_WRONG_RPC_ID}}
@@ -470,7 +471,7 @@ verify_initialize_params(#{<<"protocolVersion">> := Vsn} = Params) ->
 maybe_reply_to_caller(Session, no_caller, #{mcp_msg_type := list_roots}, {ok, Result}) ->
     Session#{client_roots => Result};
 maybe_reply_to_caller(Session, no_caller, #{mcp_msg_type := list_roots}, {error, Result}) ->
-    ?SLOG(error, #{msg => list_tools_failed, error => Result}),
+    ?LOG_T(error, #{msg => list_tools_failed, error => Result}),
     Session;
 maybe_reply_to_caller(Session, Caller, _, Result) ->
     gen_statem:reply(Caller, Result),
