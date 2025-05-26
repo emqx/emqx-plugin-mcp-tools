@@ -170,8 +170,8 @@ connected(enter, OldState, #{callback_mod := Mod, mqtt_client := MqttClient, ser
     ok = mcp_mqtt_erl_msg:subscribe_server_control_topic(MqttClient, ServerId, ServerName),
     ok = mcp_mqtt_erl_msg:send_server_online_message(
         MqttClient, ServerId, ServerName,
-        Mod:server_instructions(),
-        Mod:server_meta()
+        mcp_mqtt_erl_server_session:maybe_call(Mod, server_instructions, [], <<>>),
+        mcp_mqtt_erl_server_session:maybe_call(Mod, server_meta, [], #{})
     ),
     ?log_enter_state(OldState),
     keep_state_and_data;

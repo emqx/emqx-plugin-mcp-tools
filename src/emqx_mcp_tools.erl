@@ -47,13 +47,13 @@
 -define(CB_MOD, emqx_mcp_tools_server).
 -define(LOG_T(LEVEL, REPORT), ?SLOG(LEVEL, maps:put(tag, "EMQX_MCP_TOOLS", REPORT))).
 
--dialyzer({nowarn_function, [get_config/0]}).
 %%==============================================================================
 %% Config update
 %%==============================================================================
 get_config() ->
     emqx_plugin_helper:get_config(?PLUGIN_NAME_VSN).
 
+-spec start_mcp_tool_servers() -> ok.
 start_mcp_tool_servers() ->
     start_mcp_tool_servers(?CB_MOD, get_config()).
 

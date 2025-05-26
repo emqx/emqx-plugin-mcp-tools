@@ -27,6 +27,11 @@
 ]).
 
 -export([
+    maybe_call/3,
+    maybe_call/4
+]).
+
+-export([
     init/4,
     handle_rpc_msg/2,
     handle_rpc_timeout/2,
@@ -71,11 +76,25 @@
 
 -type loop_data() :: any().
 
+-optional_callbacks([
+    server_instructions/0,
+    server_meta/0,
+    set_logging_level/2,
+    list_resources/1,
+    list_resource_templates/1,
+    read_resource/2,
+    call_tool/3,
+    list_tools/1,
+    list_prompts/1,
+    get_prompt/3,
+    complete/3
+]).
+
 -callback server_name() -> binary().
+-callback server_version() -> binary().
 -callback server_instructions() -> binary().
 -callback server_meta() -> map().
 -callback server_id(integer()) -> binary() | random.
--callback server_version() -> binary().
 -callback server_capabilities() -> map().
 
 -callback initialize(ServerId :: binary(), client_params()) -> {ok, loop_data()} | {error, error_response()}.
@@ -96,6 +115,21 @@
 -define(MAX_PAGE_SIZE, 10).
 -define(LOG_T(LEVEL, REPORT), ?SLOG(LEVEL, maps:put(tag, "MCP_SERVER_SESSION", REPORT))).
 
+-spec maybe_call(module(), atom(), [term()], Default :: term()) -> Default :: term().
+maybe_call(Mod, Fun, Args) ->
+    Arity = length(Args),
+    case erlang:function_exported(Mod, Fun, Arity) of
+        true -> apply(Mod, Fun, Args);
+        false ->
+            {error, #{code => ?ERR_C_NOT_IMPLEMENTED_METHOD, message => <<"Method not implemented">>,
+                      data => #{module => Mod, function => Fun, arg_num => Arity}}}
+    end.
+maybe_call(Mod, Fun, Args, Default) ->
+    case erlang:function_exported(Mod, Fun, length(Args)) of
+        true -> apply(Mod, Fun, Args);
+        false -> Default
+    end.
+
 -spec init(binary(), module(), binary(), mcp_client_info()) -> {ok, t()} | {error, error_details()}.
 init(MqttClient, Mod, ServerId, _ClientInfo = #{
     mcp_client_id := McpClientId,
@@ -105,7 +139,7 @@ init(MqttClient, Mod, ServerId, _ClientInfo = #{
     ServerName = Mod:server_name(),
     ServerVsn = Mod:server_version(),
     ServerCapabilities = Mod:server_capabilities(),
-    ServerInstrunctions = Mod:server_instructions(),
+    ServerInstrunctions = maybe_call(Mod, server_instructions, [], <<"">>),
     ServerInfo = #{<<"name">> => ServerName, <<"version">> => ServerVsn},
     maybe
         {ok, #{protocol_version := ProtoVsn} = ClientParams} ?= verify_initialize_params(InitParams),
@@ -244,7 +278,7 @@ handle_json_rpc_request(Session, <<"ping">>, ReqId, _) ->
 handle_json_rpc_request(Session, <<"logging/setLevel">>, ReqId, #{<<"level">> := Level}) ->
     Mod = maps:get(mod, Session),
     LoopData = maps:get(loop_data, Session),
-    case Mod:set_logging_level(Level, LoopData) of
+    case maybe_call(Mod, set_logging_level, [Level, LoopData]) of
         {ok, LoopData1} ->
             LoggingResp = mcp_mqtt_erl_msg:json_rpc_response(ReqId, #{}),
             {ok, LoggingResp, Session#{loop_data => LoopData1}};
@@ -268,7 +302,7 @@ handle_json_rpc_request(Session, <<"resources/list">>, ReqId, #{<<"cursor">> := 
 handle_json_rpc_request(Session, <<"resources/list">>, ReqId, _) ->
     Mod = maps:get(mod, Session),
     LoopData = maps:get(loop_data, Session),
-    case Mod:list_resources(LoopData) of
+    case maybe_call(Mod, list_resources, [LoopData]) of
         {ok, Resources, LoopData1} ->
             Resp = case length(Resources) > ?MAX_PAGE_SIZE of
                 true ->
@@ -300,7 +334,7 @@ handle_json_rpc_request(Session, <<"resources/templates/list">>, ReqId, #{<<"cur
 handle_json_rpc_request(Session, <<"resources/templates/list">>, ReqId, _) ->
     Mod = maps:get(mod, Session),
     LoopData = maps:get(loop_data, Session),
-    case Mod:list_resource_templates(LoopData) of
+    case maybe_call(Mod, list_resource_templates, [LoopData]) of
         {ok, ResourceTemplates, LoopData1} ->
             Resp = case length(ResourceTemplates) > ?MAX_PAGE_SIZE of
                 true ->
@@ -318,7 +352,7 @@ handle_json_rpc_request(Session, <<"resources/templates/list">>, ReqId, _) ->
 handle_json_rpc_request(Session, <<"resources/read">>, ReqId, #{<<"uri">> := Uri}) ->
     Mod = maps:get(mod, Session),
     LoopData = maps:get(loop_data, Session),
-    case Mod:read_resource(Uri, LoopData) of
+    case maybe_call(Mod, read_resource, [Uri, LoopData]) of
         {ok, Resource, LoopData1} ->
             ReadResp = mcp_mqtt_erl_msg:json_rpc_response(ReqId, #{<<"contents">> => [Resource]}),
             {ok, ReadResp, Session#{loop_data => LoopData1}};
@@ -332,7 +366,7 @@ handle_json_rpc_request(_Session, <<"resources/unsubscribe">>, _Id, _Params) ->
 handle_json_rpc_request(Session, <<"tools/call">>, ReqId, #{<<"name">> := ToolName, <<"arguments">> := Args}) ->
     Mod = maps:get(mod, Session),
     LoopData = maps:get(loop_data, Session),
-    case Mod:call_tool(ToolName, Args, LoopData) of
+    case maybe_call(Mod, call_tool, [ToolName, Args, LoopData]) of
         {ok, Result, LoopData1} ->
             CallToolResp = mcp_mqtt_erl_msg:json_rpc_response(ReqId, #{
                 <<"content">> => ensure_list(Result),
@@ -349,7 +383,7 @@ handle_json_rpc_request(Session, <<"tools/call">>, ReqId, #{<<"name">> := ToolNa
 handle_json_rpc_request(Session, <<"tools/list">>, ReqId, _Params) ->
     Mod = maps:get(mod, Session),
     LoopData = maps:get(loop_data, Session),
-    case Mod:list_tools(LoopData) of
+    case maybe_call(Mod, list_tools, [LoopData]) of
         {ok, Tools, LoopData1} ->
             ListResp = mcp_mqtt_erl_msg:json_rpc_response(ReqId, #{<<"tools">> => Tools}),
             {ok, ListResp, Session#{loop_data => LoopData1}};
@@ -359,7 +393,7 @@ handle_json_rpc_request(Session, <<"tools/list">>, ReqId, _Params) ->
 handle_json_rpc_request(Session, <<"prompts/list">>, ReqId, _Params) ->
     Mod = maps:get(mod, Session),
     LoopData = maps:get(loop_data, Session),
-    case Mod:list_prompts(LoopData) of
+    case maybe_call(Mod, list_prompts, [LoopData]) of
         {ok, Prompts, LoopData1} ->
             ListResp = mcp_mqtt_erl_msg:json_rpc_response(ReqId, #{<<"prompts">> => Prompts}),
             {ok, ListResp, Session#{loop_data => LoopData1}};
@@ -369,7 +403,7 @@ handle_json_rpc_request(Session, <<"prompts/list">>, ReqId, _Params) ->
 handle_json_rpc_request(Session, <<"prompts/get">>, ReqId, #{<<"name">> := Name, <<"arguments">> := Args}) ->
     Mod = maps:get(mod, Session),
     LoopData = maps:get(loop_data, Session),
-    case Mod:get_prompt(Name, Args, LoopData) of
+    case maybe_call(Mod, get_prompt, [Name, Args, LoopData]) of
         {ok, Prompt, LoopData1} ->
             GetResp = mcp_mqtt_erl_msg:json_rpc_response(ReqId, Prompt),
             {ok, GetResp, Session#{loop_data => LoopData1}};
@@ -380,7 +414,7 @@ handle_json_rpc_request(Session, <<"completion/complete">>, ReqId, #{
         <<"ref">> := Ref, <<"argument">> := Args}) ->
     Mod = maps:get(mod, Session),
     LoopData = maps:get(loop_data, Session),
-    case Mod:complete(Ref, Args, LoopData) of
+    case maybe_call(Mod, complete, [Ref, Args, LoopData]) of
         {ok, Completion, LoopData1} ->
             CompleteResp = mcp_mqtt_erl_msg:json_rpc_response(ReqId, #{<<"completion">> => Completion}),
             {ok, CompleteResp, Session#{loop_data => LoopData1}};
