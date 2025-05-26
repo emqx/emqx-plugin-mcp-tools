@@ -122,5 +122,90 @@
                 "type": "object"
             }
         }
+    },
+    "emqx_connector_info": {
+        "description": "Get information for a specific connector.",
+        "inputSchema": {
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": "Connector ID, must be of format {type}:{name}.",
+                    "example": "http:my_connector"
+                }
+            },
+            "required": [
+                "id"
+            ],
+            "type": "object"
+        },
+        "outputSchema": {
+            "properties": {
+                "type": {
+                  "type": "string",
+                  "description": "The type of the connector.",
+                  "example": "http"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "The name of the connector.",
+                  "example": "my_connector"
+                },
+                "enable": {
+                  "default": true,
+                  "type": "boolean",
+                  "description": "Enable (true) or disable (false) this connector."
+                },
+                "tags": {
+                  "type": "array",
+                  "description": "Tags to annotate this config entry.",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "description": {
+                  "default": "",
+                  "type": "string",
+                  "description": "Descriptive text for this connector.",
+                  "example": "This is a sample HTTP connector that forwards messages to a remote HTTP endpoint."
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "connected",
+                    "disconnected",
+                    "connecting",
+                    "inconsistent"
+                  ],
+                  "description": "The status of the connector. 'connecting': the initial state before any health probes were made. 'connected': when the connector passes the health probes. 'disconnected': when the connector can not pass health probes. 'inconsistent': When not all the nodes are at the same status."
+                },
+                "status_reason": {
+                  "type": "string",
+                  "description": "This is the reason given in case a connector is failing to connect.",
+                  "example": "Connection refused"
+                },
+                "node_status": {
+                  "type": "array",
+                  "description": "Node status.",
+                  "items": {
+                    "$ref": "#/components/schemas/connector.node_status"
+                  }
+                },
+                "actions": {
+                  "type": "array",
+                  "description": "List of actions added to this connector.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "example": [
+                    "my_action"
+                  ]
+                },
+                "resource_opts": {
+                  "description": "Resource options.",
+                  "type": "object"
+                }
+            },
+            "type": "object"
+        }
     }
 }

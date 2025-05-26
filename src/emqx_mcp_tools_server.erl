@@ -99,7 +99,17 @@ initialize(ServerId, #{client_info := ClientInfo, client_capabilities := Capabil
 call_tool(<<"get_emqx_cluster_info">>, _Args, LoopData) ->
     {200, Ret} = emqx_mgmt_api_nodes:nodes(get, #{}),
     Result = mcp_mqtt_erl_server_utils:make_json_result(Ret),
-    {ok, Result, LoopData}.
+    {ok, Result, LoopData};
+call_tool(<<"emqx_connector_info">>, Args, LoopData) ->
+    ConnectorId = maps:get(<<"id">>, Args),
+    case emqx_mgmt_api_nodes:nodes(get, #{}) of
+        {200, Ret} ->
+            emqx_connector_api:'/connectors/:id'(get, #{bindings => #{id => ConnectorId}}),
+            Result = mcp_mqtt_erl_server_utils:make_json_result(Ret),
+            {ok, Result, LoopData};
+        {404, #{message := Msg}} ->
+            {error, #{code => 404, message => Msg}, LoopData}
+    end.
 
 -spec list_tools(loop_data()) -> {ok, [tool_def()], loop_data()}.
 list_tools(LoopData) ->

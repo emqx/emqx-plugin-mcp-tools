@@ -104,7 +104,7 @@
 -callback read_resource(Uri :: binary(), loop_data()) -> {ok, resource(), loop_data()} | {error, error_response()}.
 -callback call_tool(ToolName :: binary(), Args :: map(), loop_data()) ->
     {ok, call_tool_result() | [call_tool_result()], loop_data()}
-  | {error, call_tool_result() | [call_tool_result()]}.
+  | {error, error_response()}.
 -callback list_tools(loop_data()) -> {ok, [tool_def()], loop_data()} | {error, error_response()}.
 -callback list_prompts(loop_data()) -> {ok, [prompt_def()], loop_data()} | {error, error_response()}.
 -callback get_prompt(Name :: binary(), Args :: map(), loop_data()) ->
