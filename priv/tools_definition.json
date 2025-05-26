@@ -1,0 +1,126 @@
+{
+    "get_emqx_cluster_info": {
+        "description": "Get EMQX cluster information.",
+        "inputSchema": {},
+        "outputSchema": {
+            "type": "array",
+            "items": {
+                "properties": {
+                    "node": {
+                        "type": "string",
+                        "description": "Node name",
+                        "example": "emqx@127.0.0.1"
+                    },
+                    "connections": {
+                        "type": "integer",
+                        "description": "Number of clients session in this node",
+                        "example": 0
+                    },
+                    "live_connections": {
+                        "type": "integer",
+                        "description": "Number of clients currently connected to this node",
+                        "example": 0
+                    },
+                    "cluster_sessions": {
+                        "type": "integer",
+                        "description": "By default, it includes only those sessions that have not expired. If the `broker.session_history_retain` config is set to a duration greater than `0s`, this count will also include sessions that expired within the specified retain time",
+                        "example": 0
+                    },
+                    "load1": {
+                        "type": "number",
+                        "description": "CPU average load in 1 minute",
+                        "example": 2.66
+                    },
+                    "load5": {
+                        "type": "number",
+                        "description": "CPU average load in 5 minute",
+                        "example": 2.66
+                    },
+                    "load15": {
+                        "type": "number",
+                        "description": "CPU average load in 15 minute",
+                        "example": 2.66
+                    },
+                    "max_fds": {
+                        "type": "integer",
+                        "description": "File descriptors limit",
+                        "example": 1024
+                    },
+                    "memory_total": {
+                        "type": "string",
+                        "description": "Allocated memory",
+                        "example": "512.00M"
+                    },
+                    "memory_used": {
+                        "type": "string",
+                        "description": "Used memory",
+                        "example": "256.00M"
+                    },
+                    "node_status": {
+                        "type": "string",
+                        "enum": [
+                        "running",
+                        "stopped"
+                        ],
+                        "description": "Node status",
+                        "example": "running"
+                    },
+                    "otp_release": {
+                        "type": "string",
+                        "description": "Erlang/OTP version",
+                        "example": "24.2/12.2"
+                    },
+                    "process_available": {
+                        "type": "integer",
+                        "description": "Erlang processes limit",
+                        "example": 2097152
+                    },
+                    "process_used": {
+                        "type": "integer",
+                        "description": "Running Erlang processes",
+                        "example": 1024
+                    },
+                    "uptime": {
+                        "type": "integer",
+                        "description": "System uptime, milliseconds",
+                        "example": 5120000
+                    },
+                    "version": {
+                        "type": "string",
+                        "description": "Release version",
+                        "example": "5.0.0"
+                    },
+                    "edition": {
+                        "type": "string",
+                        "enum": [
+                        "Opensource",
+                        "Enterprise"
+                        ],
+                        "description": "Release edition",
+                        "example": "Opensource"
+                    },
+                    "sys_path": {
+                        "type": "string",
+                        "description": "Path to system files",
+                        "example": "path/to/emqx"
+                    },
+                    "log_path": {
+                        "type": "string",
+                        "description": "Path to log files",
+                        "example": "path/to/log | The log path is not yet set"
+                    },
+                    "role": {
+                        "type": "string",
+                        "enum": [
+                        "core",
+                        "replicant"
+                        ],
+                        "description": "Node role",
+                        "example": "core"
+                    }
+                },
+                "type": "object"
+            }
+        }
+    }
+}

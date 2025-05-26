@@ -315,7 +315,7 @@ handle_json_rpc_request(Session, <<"resources/list">>, ReqId, _) ->
             end,
             {ok, Resp, Session#{loop_data => LoopData1, cached_resources => Resources}};
         {error, _} = Err ->
-            {error, Err}
+            Err
     end;
 handle_json_rpc_request(Session, <<"resources/templates/list">>, ReqId, #{<<"cursor">> := PageNo}) ->
     case maps:find(cached_resource_templates, Session) of
@@ -347,7 +347,7 @@ handle_json_rpc_request(Session, <<"resources/templates/list">>, ReqId, _) ->
             end,
             {ok, Resp, Session#{loop_data => LoopData1, cached_resource_templates => ResourceTemplates}};
         {error, _} = Err ->
-            {error, Err}
+            Err
     end;
 handle_json_rpc_request(Session, <<"resources/read">>, ReqId, #{<<"uri">> := Uri}) ->
     Mod = maps:get(mod, Session),
@@ -357,7 +357,7 @@ handle_json_rpc_request(Session, <<"resources/read">>, ReqId, #{<<"uri">> := Uri
             ReadResp = mcp_mqtt_erl_msg:json_rpc_response(ReqId, #{<<"contents">> => [Resource]}),
             {ok, ReadResp, Session#{loop_data => LoopData1}};
         {error, _} = Err ->
-            {error, Err}
+            Err
     end;
 handle_json_rpc_request(_Session, <<"resources/subscribe">>, _Id, _Params) ->
     throw({not_implemented, subscribe_resource});
@@ -388,7 +388,7 @@ handle_json_rpc_request(Session, <<"tools/list">>, ReqId, _Params) ->
             ListResp = mcp_mqtt_erl_msg:json_rpc_response(ReqId, #{<<"tools">> => Tools}),
             {ok, ListResp, Session#{loop_data => LoopData1}};
         {error, _} = Err ->
-            {error, Err}
+            Err
     end;
 handle_json_rpc_request(Session, <<"prompts/list">>, ReqId, _Params) ->
     Mod = maps:get(mod, Session),
@@ -398,7 +398,7 @@ handle_json_rpc_request(Session, <<"prompts/list">>, ReqId, _Params) ->
             ListResp = mcp_mqtt_erl_msg:json_rpc_response(ReqId, #{<<"prompts">> => Prompts}),
             {ok, ListResp, Session#{loop_data => LoopData1}};
         {error, _} = Err ->
-            {error, Err}
+            Err
     end;
 handle_json_rpc_request(Session, <<"prompts/get">>, ReqId, #{<<"name">> := Name, <<"arguments">> := Args}) ->
     Mod = maps:get(mod, Session),
@@ -408,7 +408,7 @@ handle_json_rpc_request(Session, <<"prompts/get">>, ReqId, #{<<"name">> := Name,
             GetResp = mcp_mqtt_erl_msg:json_rpc_response(ReqId, Prompt),
             {ok, GetResp, Session#{loop_data => LoopData1}};
         {error, _} = Err ->
-            {error, Err}
+            Err
     end;
 handle_json_rpc_request(Session, <<"completion/complete">>, ReqId, #{
         <<"ref">> := Ref, <<"argument">> := Args}) ->
@@ -419,7 +419,7 @@ handle_json_rpc_request(Session, <<"completion/complete">>, ReqId, #{
             CompleteResp = mcp_mqtt_erl_msg:json_rpc_response(ReqId, #{<<"completion">> => Completion}),
             {ok, CompleteResp, Session#{loop_data => LoopData1}};
         {error, _} = Err ->
-            {error, Err}
+            Err
     end.
 
 handle_json_rpc_notification(Session, <<"notifications/initialized">>, _) ->
