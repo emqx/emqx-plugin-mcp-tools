@@ -19,7 +19,7 @@
 -behaviour(mcp_mqtt_erl_server_session).
 
 -include_lib("emqx_plugin_helper/include/logger.hrl").
--include("mcp_mqtt_erl_types.hrl").
+-include_lib("mcp_mqtt_erl/include/mcp_mqtt_erl_types.hrl").
 -include("emqx_mcp_tools.hrl").
 
 -export([

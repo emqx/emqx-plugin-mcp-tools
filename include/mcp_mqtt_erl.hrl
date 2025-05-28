@@ -1,4 +1,0 @@
--define(MCP_VERSION, <<"2025-03-26">>).
--define(SUPPORTED_MCP_VERSIONS, [?MCP_VERSION, <<"2024-11-05">>]).
--define(INIT_TIMEOUT, 5_000).
--define(RPC_TIMEOUT, 5_000).
