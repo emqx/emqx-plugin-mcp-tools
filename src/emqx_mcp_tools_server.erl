@@ -159,7 +159,7 @@ do_call_tool(<<"check_tcp_connectivity">>, Args, LoopData) ->
 
 -spec list_tools(loop_data()) -> {ok, [tool_def()], loop_data()}.
 list_tools(LoopData) ->
-    DefFiles = filelib:wildcard(filename:join([code:priv_dir(?MODULE), "tools_definition", "*.json"])),
+    DefFiles = filelib:wildcard(filename:join([code:priv_dir(emqx_mcp_tools), "tools_definition", "*.json"])),
     case mcp_mqtt_erl_server_utils:get_tool_definitions_from_json(DefFiles) of
         {ok, ToolDefs} ->
             {ok, ToolDefs, LoopData};
