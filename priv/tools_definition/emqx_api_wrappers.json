@@ -1,0 +1,119 @@
+{
+    "get_emqx_cluster_info": {
+        "description": "This API returns an array of objects representing node details.",
+        "inputSchema": {}
+    },
+    "emqx_connector_info": {
+        "description": "Get information and configuration for a specific connector.",
+        "inputSchema": {
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": "Connector ID, must be of format {type}:{name}.",
+                    "example": "http:my_connector"
+                }
+            },
+            "required": [
+                "id"
+            ],
+            "type": "object"
+        }
+    },
+    "list_authenticators": {
+        "description": "Get a list of authenticators configured in EMQX. Each has an Authenticator ID (as the 'id' field) in format of {mechanism}:{backend}. Each authenticator can be either enabled or disabled, indicated by the 'enable' field.",
+        "inputSchema": {}
+    },
+    "get_authenticator_info": {
+        "description": "Get information and configuration for a specific authenticator.",
+        "inputSchema": {
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": "Authenticator ID, must be of format {mechanism}:{backend}.",
+                    "example": "password_based:http"
+                }
+            },
+            "required": [
+                "id"
+            ],
+            "type": "object"
+        }
+    },
+    "get_authenticator_status": {
+        "description": "Get the status of a specific authenticator. The 'status' field indicates whether the authenticator is connected or disconnected to the backend; the 'metrics' field contains some statistics like the count of successful and failed authentications and the rate of authentications per second. It also includes 'node_status' and 'node_metrics' fields that provide information about the authenticator's status and metrics on each node.",
+        "inputSchema": {
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": "Authenticator ID, must be of format {mechanism}:{backend}.",
+                    "example": "password_based:http"
+                }
+            },
+            "required": [
+                "id"
+            ],
+            "type": "object"
+        }
+    },
+    "list_authorization_sources": {
+        "description": "Get a list of authorization sources configured in EMQX. Each authorization source is identified by their Authorization type (the 'type' field). It is NOT allowed to configure two or more sources of the same type. The 'enable' field indicates whether the source is enabled or disabled.",
+        "inputSchema": {}
+    },
+    "get_authorization_source_info": {
+        "description": "Get information and configuration for a specific authorization source.",
+        "inputSchema": {
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "description": "Authorization type, such as 'file', 'built_in_database', 'http', 'redis', 'mysql', 'postgresql', 'mongodb', 'ldap'",
+                    "example": "http"
+                }
+            },
+            "required": [
+                "type"
+            ],
+            "type": "object"
+        }
+    },
+    "get_authorization_source_status": {
+        "description": "Get the status of a specific authorization source. The 'status' field indicates whether the source is connected or disconnected to the backend; the 'metrics' field contains some statistics like the count of successful and failed authorizations and the rate of authorizations per second. It also includes 'node_status' and 'node_metrics' fields that provide information about the source's status and metrics on each node.",
+        "inputSchema": {
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "description": "Authorization type, such as 'file', 'built_in_database', 'http', 'redis', 'mysql', 'postgresql', 'mongodb', 'ldap'",
+                    "example": "http"
+                }
+            },
+            "required": [
+                "type"
+            ],
+            "type": "object"
+        }
+    },
+    "get_built_in_database_authorization_rules": {
+        "description": "Get the built-in database authorization rules. The built-in database is a default authorization source that comes with EMQX.",
+        "inputSchema": {
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "enum": [
+                        "clientid", "username", "all"
+                    ],
+                    "description": "The type of rules to retrieve. 'clientid' retrieves rules for each client Id, 'username' retrieves rules for each username, and 'all' retrieves rules for any client Id or username.",
+                    "example": "clientid"
+                },
+                "page": {
+                    "type": "integer",
+                    "description": "The page number for pagination. Default is 1.",
+                    "default": 1
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "The number of rules to return per page. Default is 100.",
+                    "default": 100
+                }
+            }
+        }
+    }
+}

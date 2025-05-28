@@ -1,0 +1,27 @@
+{
+    "check_tcp_connectivity": {
+        "description": "Check if a specific TCP host and port are reachable from each of emqx nodes. This tool attempts to establish a TCP connection to the specified host and port, and returns an array of objects, each representing the result from a different node. Each object contains a 'node_name' field indicating the emqx node name that initialted the connection, a 'check_result' field indicating whether the connection was \"success\" or any error reason if it failed, and the 'time_taken' field indicating the time taken for the connection attempt in milliseconds.",
+        "inputSchema": {
+            "properties": {
+                "host": {
+                    "type": "string",
+                    "description": "The hostname or IP address of the target host."
+                },
+                "port": {
+                    "type": "integer",
+                    "description": "The port number to check connectivity for."
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "The timeout in seconds for the connectivity check. Default is 5.",
+                    "default": 5
+                }
+            },
+            "required": [
+                "host",
+                "port"
+            ],
+            "type": "object"
+        }
+    }
+}
