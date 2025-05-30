@@ -5,13 +5,57 @@
     {
       "name": "mqtt_broker",
       "type": "string",
-      "default": "broker.emqx.io:1883",
+      "default": "localhost:1883",
       "$ui": {
         "component": "input",
         "flex": 12,
         "required": true,
         "label": "$mqtt_broker_label",
         "description": "$mqtt_broker_desc"
+      }
+    },
+    {
+      "name": "mqtt_username",
+      "type": "string",
+      "default": "",
+      "$ui": {
+        "component": "input",
+        "flex": 6,
+        "label": "$mqtt_username_label",
+        "description": "$mqtt_username_desc"
+      }
+    },
+    {
+      "name": "mqtt_password",
+      "type": "string",
+      "default": "",
+      "$ui": {
+        "component": "input-password",
+        "flex": 6,
+        "label": "$mqtt_password_label",
+        "description": "$mqtt_password_desc"
+      }
+    },
+    {
+      "name": "mqtt_clientid_prefix",
+      "type": "string",
+      "default": "emqx_doctor",
+      "$ui": {
+        "component": "input",
+        "flex": 6,
+        "label": "$mqtt_clientid_prefix_label",
+        "description": "$mqtt_clientid_prefix_desc"
+      }
+    },
+    {
+      "name": "emqx_cluster_name",
+      "type": "string",
+      "$ui": {
+        "component": "input",
+        "flex": 6,
+        "required": true,
+        "label": "$emqx_cluster_name_label",
+        "description": "$emqx_cluster_name_desc"
       }
     },
     {

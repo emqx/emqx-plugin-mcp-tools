@@ -18,5 +18,37 @@
   "$num_server_ids_validate_error": {
     "zh": "MCP Server ID 数量必须在 1 到 64 之间。",
     "en": "The number of MCP server Ids must be between 1 and 64."
+  },
+  "$mqtt_username_label": {
+    "zh": "MQTT 用户名",
+    "en": "MQTT Username"
+  },
+  "$mqtt_username_desc": {
+    "zh": "连接到 MQTT Broker 时使用的用户名。",
+    "en": "The username used to connect to the MQTT Broker."
+  },
+  "$mqtt_password_label": {
+    "zh": "MQTT 密码",
+    "en": "MQTT Password"
+  },
+  "$mqtt_password_desc": {
+    "zh": "连接到 MQTT Broker 时使用的密码。",
+    "en": "The password used to connect to the MQTT Broker."
+  },
+  "$mqtt_clientid_prefix_label": {
+    "zh": "MQTT 客户端 ID",
+    "en": "MQTT Client ID"
+  },
+  "$mqtt_clientid_prefix_desc": {
+    "zh": "连接到 MQTT Broker 时使用的客户端 ID。",
+    "en": "The client ID used to connect to the MQTT Broker."
+  },
+  "$emqx_cluster_name_label": {
+    "zh": "集群名称",
+    "en": "Cluster Name"
+  },
+  "$emqx_cluster_name_desc": {
+    "zh": "集群的唯一名称，用于标识和管理集群。",
+    "en": "The unique name of the cluster, used to identify and manage the cluster."
   }
 }

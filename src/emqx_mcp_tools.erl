@@ -29,7 +29,6 @@
 -export([
     get_config/0,
     start_mcp_tool_servers/0,
-    start_mcp_tool_servers/2,
     stop_mcp_tool_servers/0,
     on_config_changed/2,
     on_health_check/1
@@ -46,23 +45,50 @@
 
 -define(CB_MOD, emqx_mcp_tools_server).
 -define(LOG_T(LEVEL, REPORT), ?SLOG(LEVEL, maps:put(tag, "EMQX_MCP_TOOLS", REPORT))).
+-define(CONF_KEY, {?MODULE, config}).
 
 %%==============================================================================
 %% Config update
 %%==============================================================================
+update_config(Config) ->
+    MqttBroker = maps:get(<<"mqtt_broker">>, Config, <<"localhost:1883">>),
+    NumServerIds = maps:get(<<"num_server_ids">>, Config, 1),
+    ClusterName = maps:get(<<"emqx_cluster_name">>, Config),
+    MqttOptions = parse_mqtt_opts(Config),
+    NewConf = #{
+        mqtt_broker => MqttBroker,
+        num_server_ids => NumServerIds,
+        emqx_cluster_name => ClusterName,
+        mqtt_options => MqttOptions
+    },
+    persistent_term:put(?CONF_KEY, NewConf).
+
 get_config() ->
-    emqx_plugin_helper:get_config(?PLUGIN_NAME_VSN).
+    persistent_term:get(?CONF_KEY, #{}).
+
+parse_mqtt_opts(Config) ->
+    MqttKeys = [ {<<"mqtt_username">>, username}
+               , {<<"mqtt_password">>, password}
+               , {<<"mqtt_clientid_prefix">>, clientid_prefix}
+               ],
+    lists:foldl(fun({Key, ReplaceKey}, Acc) ->
+            case maps:get(Key, Config, null) of
+                null -> Acc;
+                undefined -> Acc;
+                <<>> -> Acc;
+                Value -> Acc#{ReplaceKey => Value}
+            end
+        end, #{}, MqttKeys).
 
 -spec start_mcp_tool_servers() -> ok.
 start_mcp_tool_servers() ->
-    start_mcp_tool_servers(?CB_MOD, get_config()).
-
-start_mcp_tool_servers(Mod, Config) ->
+    Mod = ?CB_MOD,
+    Config = get_config(),
     ?LOG_T(info, #{msg => start_mcp_tool_servers, mod => Mod,
         config => Config, pid => self(), group_leader => group_leader()}),
-    MqttBroker = maps:get(<<"mqtt_broker">>, Config, <<"local">>),
-    NumServerIds = maps:get(<<"num_server_ids">>, Config, 1),
-    MqttOptions = maps:get(<<"mqtt_options">>, Config, #{}),
+    MqttBroker = maps:get(mqtt_broker, Config),
+    NumServerIds = maps:get(num_server_ids, Config),
+    MqttOptions = maps:get(mqtt_options, Config),
     Conf = #{
         broker_address => get_broker_address(MqttBroker),
         callback_mod => Mod,
@@ -97,6 +123,8 @@ start_link() ->
 
 init([]) ->
     erlang:process_flag(trap_exit, true),
+    Config = emqx_plugin_helper:get_config(?PLUGIN_NAME_VSN),
+    update_config(Config),
     ?LOG_T(debug, #{msg => "emqx_mcp_tools_started"}),
     {ok, #{}}.
 
@@ -108,7 +136,8 @@ handle_cast({on_changed, _OldConfig, NewConfig}, State) ->
                   old_config => _OldConfig,
                   new_config => NewConfig}),
     ok = stop_mcp_tool_servers(),
-    ok = start_mcp_tool_servers(?CB_MOD, NewConfig),
+    ok = update_config(NewConfig),
+    ok = start_mcp_tool_servers(),
     {noreply, State};
 handle_cast(_Request, State) ->
     {noreply, State}.
@@ -122,7 +151,7 @@ terminate(_Reason, _State) ->
 %%==============================================================================
 %% Internal functions
 %%==============================================================================
-get_broker_address(<<"local">>) -> local;
+get_broker_address(<<"_local">>) -> local;
 get_broker_address(MqttBroker) when is_binary(MqttBroker) ->
     case string:split(MqttBroker, ":") of
         [Host, Port] -> {Host, binary_to_integer(Port)};

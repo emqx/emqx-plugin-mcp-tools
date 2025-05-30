@@ -1,3 +1,7 @@
 
 mqtt_broker = "localhost:1883"
+mqtt_username = ""
+mqtt_password = ""
+mqtt_clientid_prefix = ""
+emqx_cluster_name = "cluster-a"
 num_server_ids = 1
