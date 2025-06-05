@@ -67,25 +67,35 @@ get_config() ->
     persistent_term:get(?CONF_KEY, #{}).
 
 parse_mqtt_opts(Config) ->
-    MqttKeys = [ {<<"mqtt_username">>, username}
-               , {<<"mqtt_password">>, password}
-               , {<<"mqtt_clientid_prefix">>, clientid_prefix}
-               ],
-    lists:foldl(fun({Key, ReplaceKey}, Acc) ->
+    MqttKeys = [
+        {<<"mqtt_username">>, username},
+        {<<"mqtt_password">>, password},
+        {<<"mqtt_clientid_prefix">>, clientid_prefix}
+    ],
+    lists:foldl(
+        fun({Key, ReplaceKey}, Acc) ->
             case maps:get(Key, Config, null) of
                 null -> Acc;
                 undefined -> Acc;
                 <<>> -> Acc;
                 Value -> Acc#{ReplaceKey => Value}
             end
-        end, #{}, MqttKeys).
+        end,
+        #{},
+        MqttKeys
+    ).
 
 -spec start_mcp_tool_servers() -> ok.
 start_mcp_tool_servers() ->
     Mod = ?CB_MOD,
     Config = get_config(),
-    ?LOG_T(info, #{msg => start_mcp_tool_servers, mod => Mod,
-        config => Config, pid => self(), group_leader => group_leader()}),
+    ?LOG_T(info, #{
+        msg => start_mcp_tool_servers,
+        mod => Mod,
+        config => Config,
+        pid => self(),
+        group_leader => group_leader()
+    }),
     MqttBroker = maps:get(mqtt_broker, Config),
     NumServerIds = maps:get(num_server_ids, Config),
     MqttOptions = maps:get(mqtt_options, Config),
@@ -132,9 +142,11 @@ handle_call(_Request, _From, State) ->
     {reply, ok, State}.
 
 handle_cast({on_changed, _OldConfig, NewConfig}, State) ->
-    ?LOG_T(info, #{msg => emqx_mcp_tools_config_changed,
-                  old_config => _OldConfig,
-                  new_config => NewConfig}),
+    ?LOG_T(info, #{
+        msg => emqx_mcp_tools_config_changed,
+        old_config => _OldConfig,
+        new_config => NewConfig
+    }),
     ok = stop_mcp_tool_servers(),
     ok = update_config(NewConfig),
     ok = start_mcp_tool_servers(),
@@ -151,7 +163,8 @@ terminate(_Reason, _State) ->
 %%==============================================================================
 %% Internal functions
 %%==============================================================================
-get_broker_address(<<"_local">>) -> local;
+get_broker_address(<<"_local">>) ->
+    local;
 get_broker_address(MqttBroker) when is_binary(MqttBroker) ->
     case string:split(MqttBroker, ":") of
         [Host, Port] -> {Host, binary_to_integer(Port)};
