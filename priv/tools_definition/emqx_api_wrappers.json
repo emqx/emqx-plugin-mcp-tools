@@ -1,6 +1,6 @@
 {
     "get_emqx_cluster_info": {
-        "description": "This API returns an array of objects representing node details.",
+        "description": "This API returns an array of objects representing node details, including the node name, version, OTP release, CPU load averages, uptime, node role, memory usage, node status (running or stopped), maximum file descriptors, number of connections, edition (Opensource or Enterprise). The 'node' field is the name of the EMQX node, which is in the format of 'emqx@hostname'. The 'connections' field indicates the number of clients that have sessions on the node, including the ones that are currently disconnected but still have sessions. The 'live_connections' field indicates the number of clients that are currently connected to the node.",
         "inputSchema": {}
     },
     "emqx_connector_info": {

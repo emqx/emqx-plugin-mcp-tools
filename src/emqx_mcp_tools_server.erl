@@ -96,15 +96,18 @@ initialize(ServerId, #{client_info := ClientInfo, client_capabilities := Capabil
         mcp_client_id => McpClientId
     }}.
 
--spec call_tool(binary(), map(), loop_data()) -> {ok, call_tool_result() | [call_tool_result()], loop_data()}.
+-spec call_tool(binary(), map(), loop_data()) -> {ok, call_tool_result() | [call_tool_result()], loop_data()} | {error, error_response()}.
 call_tool(Name, Args, LoopData) ->
     try do_call_tool(Name, Args, LoopData)
     catch
         error:{badkey, Key} ->
             {error, #{code => 400, message => <<"Bad Request: Missing key '", Key/binary, "' in arguments">>}};
+        throw:Reason ->
+            ErrReason = format_error_to_bin("call_tool failed, tool: ~p, reason: ~p", [Reason]),
+            {error, #{code => 400, message => <<"Bad Request: ", ErrReason/binary>>}};
         Error:Reason:St ->
             ?SLOG(error, #{msg => call_tool_failed, name => Name, args => Args, error => Error, reason => Reason, stacktrace => St}),
-            ErrReason = format_error_to_bin({Error, Reason}),
+            ErrReason = format_error_to_bin("call_tool failed, tool: ~p, reason: ~p", [{Error, Reason}]),
             {error, #{code => 500, message => <<"Internal Server Error: ", ErrReason/binary>>}}
     end.
 
@@ -154,8 +157,20 @@ do_call_tool(<<"check_tcp_connectivity">>, Args, LoopData) ->
     Host = maps:get(<<"host">>, Args),
     Port = maps:get(<<"port">>, Args),
     TimeoutMs = timer:seconds(maps:get(<<"timeout">>, Args, 5)),
-    NodeResults = emqx_rpc:multicall_on_running(emqx:running_nodes(), emqx_mcp_tools_network, check_tcp_connectivity, [Host, Port, TimeoutMs], TimeoutMs + 1000),
-    {ok, NodeResults, LoopData}.
+    rpc_multicall(emqx_mcp_tools_network, check_tcp_connectivity, [Host, Port, TimeoutMs], TimeoutMs + 1000, LoopData);
+do_call_tool(<<"system_time">>, _Args, LoopData) ->
+    rpc_multicall(emqx_mcp_tools_common, system_time, [], 1000, LoopData);
+do_call_tool(<<"get_log_messages">>, Args, LoopData) ->
+    NodeName = maps:get(<<"node">>, Args, node()),
+    LogLevel = maps:get(<<"level">>, Args, <<"debug">>),
+    MaxMsgs = maps:get(<<"max_messages">>, Args, 100),
+    StartTime = maps:get(<<"start_time">>, Args, <<"now-10m">>),
+    EndTime = maps:get(<<"end_time">>, Args, <<"now">>),
+    rpc_call(NodeName, emqx_mcp_tools_common, get_log_messages,
+             [LogLevel, MaxMsgs, StartTime, EndTime], 5000, LoopData);
+do_call_tool(Name, Args, _LoopData) ->
+    ?SLOG(error, #{msg => call_tool_not_found, name => Name, args => Args}),
+    {error, #{code => 404, message => <<"Tool not found: ", Name/binary>>}}.
 
 -spec list_tools(loop_data()) -> {ok, [tool_def()], loop_data()}.
 list_tools(LoopData) ->
@@ -178,5 +193,26 @@ handle_http_api_result({204}, LoopData) ->
 handle_http_api_result({Code, #{message := Msg}}, _LoopData) ->
     {error, #{code => Code, message => Msg}}.
 
-format_error_to_bin(Term) ->
-    iolist_to_binary(io_lib:format("~p", [Term])).
+rpc_multicall(Module, Function, Args, Timeout, LoopData) ->
+    NodeResults = emqx_rpc:multicall_on_running(emqx:running_nodes(), Module, Function, Args, Timeout),
+    case lists:any(fun({error, _}) -> true; (_) -> false end, NodeResults) of
+        true ->
+            ?SLOG(error, #{msg => call_tool_failed, function => Function, result => NodeResults}),
+            {error, #{code => 500, message => format_error_to_bin("call ~s failed on one of the node, result: ~p", [Function, NodeResults])}};
+        false ->
+            {ok, NodeResults, LoopData}
+    end.
+
+rpc_call(NodeName, Module, Function, Args, Timeout, LoopData) ->
+    Key = {Module, Function, Args},
+    case emqx_mgmt_api_lib:with_node(NodeName,
+            fun(Node) -> emqx_rpc:call(Key, Node, Module, Function, Args, Timeout) end) of
+        {badrpc, Reason} ->
+            ?SLOG(error, #{msg => call_tool_failed, function => Function, node => NodeName, reason => Reason}),
+            {error, #{code => 500, message => format_error_to_bin("call ~s on node ~s failed: ~p", [Function, NodeName, Reason])}};
+        Result ->
+            {ok, Result, LoopData}
+    end.
+
+format_error_to_bin(Format, Term) ->
+    iolist_to_binary(io_lib:format(Format, [Term])).
