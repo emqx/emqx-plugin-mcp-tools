@@ -106,6 +106,7 @@ restart_plugin() {
     date -u +"%Y-%m-%dT%H:%M:%SZ"
     echo "restarting plugin $PLUGIN_NAME_VSN on $container"
     docker exec -t "$container" emqx ctl plugins stop $PLUGIN_NAME_VSN
+    docker exec -t "$container" emqx ctl plugins disable $PLUGIN_NAME_VSN
     docker exec -t "$container" emqx ctl plugins uninstall $PLUGIN_NAME_VSN
     docker exec -t "$container" emqx ctl plugins install $PLUGIN_NAME_VSN
     docker exec -t "$container" emqx ctl plugins start $PLUGIN_NAME_VSN

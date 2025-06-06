@@ -181,8 +181,8 @@ do_call_tool(<<"check_tcp_connectivity">>, Args, LoopData) ->
         TimeoutMs + 1000,
         LoopData
     );
-do_call_tool(<<"system_time">>, _Args, LoopData) ->
-    rpc_multicall(emqx_mcp_tools_common, system_time, [], 1000, LoopData);
+do_call_tool(<<"get_system_time">>, _Args, LoopData) ->
+    rpc_multicall(emqx_mcp_tools_common, get_system_time, [], 1000, LoopData);
 do_call_tool(<<"get_log_messages">>, Args, LoopData) ->
     NodeName = maps:get(<<"node">>, Args, node()),
     LogLevel = maps:get(<<"level">>, Args, <<"debug">>),
@@ -251,7 +251,7 @@ rpc_multicall(Module, Function, Args, Timeout, LoopData) ->
                 ])
             }};
         false ->
-            {ok, NodeResults, LoopData}
+            {ok, mcp_mqtt_erl_server_utils:make_json_result(NodeResults), LoopData}
     end.
 
 rpc_call(NodeName, Module, Function, Args, Timeout, LoopData) ->
@@ -285,7 +285,7 @@ rpc_call(NodeName, Module, Function, Args, Timeout, LoopData) ->
                 ])
             }};
         Result ->
-            {ok, Result, LoopData}
+            {ok, mcp_mqtt_erl_server_utils:make_json_result(Result), LoopData}
     end.
 
 format_error_to_bin(Format, Term) ->

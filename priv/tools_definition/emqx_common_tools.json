@@ -1,5 +1,5 @@
 {
-    "system_time": {
+    "get_system_time": {
         "description": "Get the current OS system time of each emqx node. This tool returns an array of objects, each representing the current operating system time in milliseconds from a different node. Each object contains a 'node_name' field indicating the emqx node name that provided the time, and a 'system_time' field containing the current system time in RFC3339 format.",
         "inputSchema": {
             "type": "object",

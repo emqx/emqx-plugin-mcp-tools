@@ -3,13 +3,13 @@
 -include_lib("emqx_plugin_helper/include/logger.hrl").
 
 -export([
-    system_time/0,
+    get_system_time/0,
     get_log_messages/4
 ]).
 
 -define(READ_AHEAD, 128 * 1024).
 
-system_time() ->
+get_system_time() ->
     Ts = list_to_binary(calendar:system_time_to_rfc3339(now_us(), [{unit, microsecond}])),
     #{system_time => Ts, node => node()}.
 
