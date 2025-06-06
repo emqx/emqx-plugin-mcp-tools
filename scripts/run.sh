@@ -63,6 +63,9 @@ case "$IMAGE" in
     emqx/emqx-enterprise:5.9*)
         LICENSE_KEY="evaluation"
         ;;
+    emqx/emqx-enterprise:5.10*)
+        LICENSE_KEY="evaluation"
+        ;;
     *)
         show_help
         exit 1
