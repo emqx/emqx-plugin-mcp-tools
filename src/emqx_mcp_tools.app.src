@@ -1,6 +1,6 @@
 {application, emqx_mcp_tools, [
     {description, "An EMQX Plugin that provides some useful tools via MCP over MQTT."},
-    {vsn, "0.0.1"},
+    {vsn, "0.0.2"},
     {modules, []},
     {registered, [emqx_mcp_tools_sup]},
     {applications, [kernel, stdlib, emqtt, emqx_utils, emqx_plugin_helper, mcp_mqtt_erl]},

@@ -110,7 +110,7 @@ call_tool(Name, Args, LoopData) ->
                 message => <<"Bad Request: Missing key '", Key/binary, "' in arguments">>
             }};
         throw:Reason ->
-            ErrReason = format_error_to_bin("call_tool failed, tool: ~p, reason: ~p", [Reason]),
+            ErrReason = format_error_to_bin("call_tool failed, tool: ~p, reason: ~p", [Name, Reason]),
             {error, #{code => 400, message => <<"Bad Request: ", ErrReason/binary>>}};
         Error:Reason:St ->
             ?SLOG(error, #{
@@ -122,6 +122,7 @@ call_tool(Name, Args, LoopData) ->
                 stacktrace => St
             }),
             ErrReason = format_error_to_bin("call_tool failed, tool: ~p, reason: ~p", [
+                Name,
                 {Error, Reason}
             ]),
             {error, #{code => 500, message => <<"Internal Server Error: ", ErrReason/binary>>}}
@@ -256,15 +257,27 @@ rpc_multicall(Module, Function, Args, Timeout, LoopData) ->
 rpc_call(NodeName, Module, Function, Args, Timeout, LoopData) ->
     Key = {Module, Function, Args},
     case
-        emqx_mgmt_api_lib:with_node(
+        with_node(
             NodeName,
             fun(Node) -> emqx_rpc:call(Key, Node, Module, Function, Args, Timeout) end
         )
     of
         {badrpc, Reason} ->
             ?SLOG(error, #{
-                msg => call_tool_failed, function => Function, node => NodeName, reason => Reason
+                msg => call_tool_badrpc, function => Function, node => NodeName, reason => Reason
             }),
+            {error, #{
+                code => 500,
+                message => format_error_to_bin("call ~s on node ~s rpc failed: ~p", [
+                    Function, NodeName, Reason
+                ])
+            }};
+        {error, node_not_found} ->
+            {error, #{
+                code => 400,
+                message => format_error_to_bin("node ~s not found", [NodeName])
+            }};
+        {error, Reason} ->
             {error, #{
                 code => 500,
                 message => format_error_to_bin("call ~s on node ~s failed: ~p", [
@@ -277,3 +290,31 @@ rpc_call(NodeName, Module, Function, Args, Timeout, LoopData) ->
 
 format_error_to_bin(Format, Term) ->
     iolist_to_binary(io_lib:format(Format, [Term])).
+
+with_node(Node0, Fun) ->
+    case lookup_node(Node0) of
+        {ok, Node} ->
+            Fun(Node);
+        not_found ->
+            {error, node_not_found}
+    end.
+
+-spec lookup_node(atom() | binary()) -> {ok, atom()} | not_found.
+lookup_node(BinNode) when is_binary(BinNode) ->
+    case emqx_utils:safe_to_existing_atom(BinNode, utf8) of
+        {ok, Node} ->
+            is_running_node(Node);
+        _Error ->
+            not_found
+    end;
+lookup_node(Node) when is_atom(Node) ->
+    is_running_node(Node).
+
+-spec is_running_node(atom()) -> {ok, atom()} | not_found.
+is_running_node(Node) ->
+    case lists:member(Node, mria:running_nodes()) of
+        true ->
+            {ok, Node};
+        false ->
+            not_found
+    end.

@@ -10,7 +10,8 @@
 -define(READ_AHEAD, 128 * 1024).
 
 system_time() ->
-    #{system_time => os:system_time(microsecond), node => node()}.
+    Ts = list_to_binary(calendar:system_time_to_rfc3339(now_us(), [{unit, microsecond}])),
+    #{system_time => Ts, node => node()}.
 
 get_log_messages(LogLevel0, MaxMsgs0, StartTime0, EndTime0) ->
     LogLevel = log_level(LogLevel0),
@@ -237,7 +238,7 @@ validate_range(Value, _Min, _Max) ->
     throw({should_be_integer, #{value => Value}}).
 
 parse_time(<<"now">>) ->
-    os:system_time(microsecond);
+    now_us();
 parse_time(<<"now", Str/binary>> = T) ->
     case string:trim(Str, both) of
         <<"-", OffsetStr/binary>> ->
@@ -279,7 +280,7 @@ parse_relative_time(Sign, OffsetStr) ->
                     _ -> throw({bad_time_unit, #{unit => Unit}})
                 end,
             OffSetUs = Sign * OffSetMs * 1000,
-            os:system_time(microsecond) + OffSetUs;
+            now_us() + OffSetUs;
         nomatch ->
             throw({bad_time_offset, #{offset => OffsetStr}})
     end.
@@ -287,3 +288,6 @@ parse_relative_time(Sign, OffsetStr) ->
 is_numeric_str(Str) when is_binary(Str) ->
     String = binary_to_list(Str),
     [Char || Char <- String, Char < $0 orelse Char > $9] == [].
+
+now_us() ->
+    os:system_time(microsecond).
