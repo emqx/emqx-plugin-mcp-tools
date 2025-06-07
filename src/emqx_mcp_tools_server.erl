@@ -127,7 +127,7 @@ call_tool(Name, Args, LoopData) ->
             ]),
             {error, #{code => 500, message => <<"Internal Server Error: ", ErrReason/binary>>}}
     end.
-
+-dialyzer({no_unknown, [do_call_tool/3]}).
 do_call_tool(<<"get_emqx_cluster_info">>, _Args, LoopData) ->
     handle_http_api_result(emqx_mgmt_api_nodes:nodes(get, #{}), LoopData);
 do_call_tool(<<"emqx_connector_info">>, Args, LoopData) ->
@@ -229,9 +229,10 @@ handle_http_api_result({204}, LoopData) ->
 handle_http_api_result({Code, #{message := Msg}}, _LoopData) ->
     {error, #{code => Code, message => Msg}}.
 
+-dialyzer({no_unknown, [rpc_multicall/5]}).
 rpc_multicall(Module, Function, Args, Timeout, LoopData) ->
     NodeResults = emqx_rpc:multicall_on_running(
-        emqx:running_nodes(), Module, Function, Args, Timeout
+        mria:running_nodes(), Module, Function, Args, Timeout
     ),
     case
         lists:any(
@@ -254,6 +255,7 @@ rpc_multicall(Module, Function, Args, Timeout, LoopData) ->
             {ok, mcp_mqtt_erl_server_utils:make_json_result(NodeResults), LoopData}
     end.
 
+-dialyzer({no_unknown, [rpc_call/6]}).
 rpc_call(NodeName, Module, Function, Args, Timeout, LoopData) ->
     Key = {Module, Function, Args},
     case
@@ -299,6 +301,7 @@ with_node(Node0, Fun) ->
             {error, node_not_found}
     end.
 
+-dialyzer({no_unknown, lookup_node/1}).
 -spec lookup_node(atom() | binary()) -> {ok, atom()} | not_found.
 lookup_node(BinNode) when is_binary(BinNode) ->
     case emqx_utils:safe_to_existing_atom(BinNode, utf8) of
@@ -310,6 +313,7 @@ lookup_node(BinNode) when is_binary(BinNode) ->
 lookup_node(Node) when is_atom(Node) ->
     is_running_node(Node).
 
+-dialyzer({no_unknown, is_running_node/1}).
 -spec is_running_node(atom()) -> {ok, atom()} | not_found.
 is_running_node(Node) ->
     case lists:member(Node, mria:running_nodes()) of

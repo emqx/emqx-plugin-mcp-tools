@@ -165,7 +165,7 @@ read_lines_to_list(Fd, LogType, LogLevel, StartTime, EndTime, MsgOrder, {LogMsgs
 
 parse_line(Line, json) ->
     try
-        #{<<"time">> := Ts, <<"level">> := Level} = LogMsg = emqx_utils_json:decode(Line),
+        #{<<"time">> := Ts, <<"level">> := Level} = LogMsg = json:decode(Line),
         {ok, #{time => parse_time(Ts), level => log_level(Level), message => LogMsg}}
     catch
         _:_ ->

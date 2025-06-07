@@ -29,6 +29,10 @@
     on_health_check/1
 ]).
 
+%% NOTE
+%% Functions from EMQX are unavailable at compile time.
+-dialyzer({no_unknown, [start/2, stop/1]}).
+
 start(_StartType, _StartArgs) ->
     {ok, Sup} = emqx_mcp_tools_sup:start_link(),
     emqx_mcp_tools:start_mcp_tool_servers(),

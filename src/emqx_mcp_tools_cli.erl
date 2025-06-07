@@ -15,6 +15,10 @@
 %%--------------------------------------------------------------------
 -module(emqx_mcp_tools_cli).
 
+%% NOTE
+%% Functions from EMQX are unavailable at compile time.
+-dialyzer({no_unknown, [cmd/1]}).
+
 %% This is an example on how to extend `emqx ctl` with your own commands.
 
 -export([cmd/1]).
