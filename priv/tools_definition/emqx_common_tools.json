@@ -7,7 +7,7 @@
         }
     },
     "get_log_messages": {
-        "description": "Get log messages from a specific emqx node. This tool retrieves log messages based on the specified minimum log level ('level'), time range ('start_time' and 'end_time'), and the maximum number of log messages to return in a single query (max_messages). The 'start_time' and 'end_time' fields are in RFC3339 format. If the start_time is later than the end_time, the tool will search the logs backwards from the end_time until reaching the start_time, and the returned list of logs will be arranged in reverse chronological order. The tool returns an object containing the 'node_name' and an array of log messages that are more severe than or equal to the specified 'level', each represented as an string (if emqx log format is set to 'text') or an JSON object (if emqx log format is set to 'json'). It will return maximum 'max_messages' number of messages, if you want to retrieve more messages, you can call this tool again by setting 'start_time' to the timestamp of the last message returned in the previous call.",
+        "description": "Get log messages from a specific emqx node. This tool retrieves log messages based on the specified minimum log level ('level'), time range ('start_time' and 'end_time'), and the maximum number of log messages to return in a single query (max_messages). The 'start_time' and 'end_time' fields are in RFC3339 format. If the start_time is later than the end_time, the tool will search the logs backwards from the end_time until reaching the start_time, and the returned list of logs will be arranged in reverse chronological order. The tool returns an object containing the 'node_name' and an array of log messages that are more severe than or equal to the specified 'level', each represented as a text string or a JSON string. It will return maximum 'max_messages' number of messages, if you want to retrieve more messages, you can call this tool again by setting 'start_time' to the timestamp of the last message returned in the previous call.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -26,7 +26,7 @@
                 "start_time": {
                     "type": "string",
                     "format": "date-time",
-                    "description": "The start time in RFC3339 format to filter log messages. If not specified, it defaults to the current time minus 10 mins. You can also use relative time formats like 'now-10m' or 'now-1h'. The following time units are supported: 's' for seconds, 'm' for minutes, 'h' for hours, 'd' for days, and 'w' for weeks. If provided 'start_time' is later than 'end_time', the tool will return log messages in reverse chronological order from 'end_time' to 'start_time'.",
+                    "description": "The start time in RFC3339 format to filter log messages. If not specified, it defaults to the current time minus 10 mins. You can also use relative time formats from 'now'. e.g. 'now' means the current time, 'now-1h' means one hour ago, 'now+30m' means 30 minutes in the future. Supported time units are: 's' (seconds), 'm' (minutes), 'h' (hours), 'd' (days), 'w' (weeks).",
                     "default": "now-10m"
                 },
                 "end_time": {

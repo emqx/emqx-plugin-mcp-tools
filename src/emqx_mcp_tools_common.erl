@@ -7,6 +7,14 @@
     get_log_messages/4
 ]).
 
+-ifdef(TEST).
+-export([
+    parse_time/1,
+    log_level/1,
+    parse_line/2
+]).
+-endif.
+
 -define(READ_AHEAD, 128 * 1024).
 
 get_system_time() ->
@@ -158,7 +166,7 @@ read_lines_to_list(Fd, LogType, LogLevel, StartTime, EndTime, MsgOrder, {LogMsgs
 parse_line(Line, json) ->
     try
         #{<<"time">> := Ts, <<"level">> := Level} = LogMsg = emqx_utils_json:decode(Line),
-        {ok, #{time => Ts, level => log_level(Level), message => LogMsg}}
+        {ok, #{time => parse_time(Ts), level => log_level(Level), message => LogMsg}}
     catch
         _:_ ->
             {error, {bad_json_format, Line}}
@@ -225,7 +233,7 @@ log_level(<<"error">>) -> error;
 log_level(<<"critical">>) -> critical;
 log_level(<<"alert">>) -> alert;
 log_level(<<"emergency">>) -> emergency;
-log_level(Level) -> throw({badlog_level, #{level => Level}}).
+log_level(Level) -> throw({bad_log_level, #{level => Level}}).
 
 validate_range(Value, Min, Max) when is_integer(Value) ->
     case Value of
@@ -237,6 +245,7 @@ validate_range(Value, Min, Max) when is_integer(Value) ->
 validate_range(Value, _Min, _Max) ->
     throw({should_be_integer, #{value => Value}}).
 
+-spec parse_time(binary() | integer()) -> integer().
 parse_time(<<"now">>) ->
     now_us();
 parse_time(<<"now", Str/binary>> = T) ->
@@ -262,13 +271,16 @@ parse_time(Time) when is_binary(Time) ->
     end.
 
 parse_relative_time(Sign, OffsetStr) ->
-    case re:run(OffsetStr, "^(\\d+)([smhdw])$", [{capture, all_but_first, binary}]) of
+    case re:run(OffsetStr, "^(\\d+\\.?\\d*)([smhdw])$", [{capture, all_but_first, binary}]) of
         {match, [NumStr, Unit]} ->
             Num =
                 try
-                    binary_to_float(NumStr)
+                    case string:find(NumStr, ".") of
+                        nomatch -> binary_to_integer(NumStr);
+                        _ -> binary_to_float(NumStr)
+                    end
                 catch
-                    _:_ -> throw({bad_time_number, #{number => NumStr}})
+                    _:_ -> throw({bad_time_format, #{offset => OffsetStr}})
                 end,
             OffSetMs =
                 case Unit of
@@ -280,9 +292,9 @@ parse_relative_time(Sign, OffsetStr) ->
                     _ -> throw({bad_time_unit, #{unit => Unit}})
                 end,
             OffSetUs = Sign * OffSetMs * 1000,
-            now_us() + OffSetUs;
+            erlang:floor(now_us() + OffSetUs);
         nomatch ->
-            throw({bad_time_offset, #{offset => OffsetStr}})
+            throw({bad_time_format, #{offset => OffsetStr}})
     end.
 
 is_numeric_str(Str) when is_binary(Str) ->
