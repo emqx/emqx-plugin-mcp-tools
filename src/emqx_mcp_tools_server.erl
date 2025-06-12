@@ -104,10 +104,10 @@ call_tool(Name, Args, LoopData) ->
     try
         do_call_tool(Name, Args, LoopData)
     catch
-        error:{badkey, Key} ->
+        error:{badkey, Key} when is_binary(Key) ->
             {error, #{
                 code => 400,
-                message => <<"Bad Request: Missing key '", Key/binary, "' in arguments">>
+                message => <<"Missing required key '", Key/binary, "' in arguments">>
             }};
         throw:Reason ->
             ErrReason = format_error_to_bin("call_tool failed, tool: ~p, reason: ~p", [Name, Reason]),
@@ -131,28 +131,28 @@ call_tool(Name, Args, LoopData) ->
 do_call_tool(<<"get_emqx_cluster_info">>, _Args, LoopData) ->
     handle_http_api_result(emqx_mgmt_api_nodes:nodes(get, #{}), LoopData);
 do_call_tool(<<"emqx_connector_info">>, Args, LoopData) ->
-    ConnectorId = maps:get(<<"id">>, Args),
+    ConnectorId = get_required(<<"id">>, Args),
     Result = emqx_connector_api:'/connectors/:id'(get, #{bindings => #{id => ConnectorId}}),
     handle_http_api_result(Result, LoopData);
 do_call_tool(<<"list_authenticators">>, _Args, LoopData) ->
     Result = emqx_authn_api:authenticators(get, #{}),
     handle_http_api_result(Result, LoopData);
 do_call_tool(<<"get_authenticator_info">>, Args, LoopData) ->
-    AuthenticatorId = maps:get(<<"id">>, Args),
+    AuthenticatorId = get_required(<<"id">>, Args),
     Result = emqx_authn_api:authenticator(get, #{bindings => #{id => AuthenticatorId}}),
     handle_http_api_result(Result, LoopData);
 do_call_tool(<<"get_authenticator_status">>, Args, LoopData) ->
-    AuthenticatorId = maps:get(<<"id">>, Args),
+    AuthenticatorId = get_required(<<"id">>, Args),
     Result = emqx_authn_api:authenticator_status(get, #{bindings => #{id => AuthenticatorId}}),
     handle_http_api_result(Result, LoopData);
 do_call_tool(<<"list_authorization_sources">>, _Args, LoopData) ->
     handle_http_api_result(emqx_authz_api_sources:sources(get, #{}), LoopData);
 do_call_tool(<<"get_authorization_source_info">>, Args, LoopData) ->
-    SourceType = maps:get(<<"type">>, Args),
+    SourceType = get_required(<<"type">>, Args),
     Result = emqx_authz_api_sources:source(get, #{bindings => #{type => SourceType}}),
     handle_http_api_result(Result, LoopData);
 do_call_tool(<<"get_authorization_source_status">>, Args, LoopData) ->
-    SourceType = maps:get(<<"type">>, Args),
+    SourceType = get_required(<<"type">>, Args),
     AtomSourceType = binary_to_existing_atom(SourceType),
     Result = emqx_authz_api_sources:source_status(get, #{bindings => #{type => AtomSourceType}}),
     handle_http_api_result(Result, LoopData);
@@ -161,7 +161,7 @@ do_call_tool(<<"get_built_in_database_authorization_rules">>, Args, LoopData) ->
     Limit = maps:get(<<"limit">>, Args, 100),
     QueryStr = #{<<"limit">> => Limit, <<"page">> => Page},
     Result =
-        case maps:get(<<"type">>, Args) of
+        case get_required(<<"type">>, Args) of
             <<"all">> ->
                 emqx_authz_api_mnesia:all(get, #{});
             <<"clientid">> ->
@@ -171,8 +171,8 @@ do_call_tool(<<"get_built_in_database_authorization_rules">>, Args, LoopData) ->
         end,
     handle_http_api_result(Result, LoopData);
 do_call_tool(<<"check_tcp_connectivity">>, Args, LoopData) ->
-    Host = maps:get(<<"host">>, Args),
-    Port = maps:get(<<"port">>, Args),
+    Host = get_required(<<"host">>, Args),
+    Port = get_required(<<"port">>, Args),
     TimeoutMs = timer:seconds(maps:get(<<"timeout">>, Args, 5)),
     rpc_multicall(
         emqx_mcp_tools_network,
@@ -183,18 +183,30 @@ do_call_tool(<<"check_tcp_connectivity">>, Args, LoopData) ->
     );
 do_call_tool(<<"get_system_time">>, _Args, LoopData) ->
     rpc_multicall(emqx_mcp_tools_common, get_system_time, [], 1000, LoopData);
-do_call_tool(<<"get_log_messages">>, Args, LoopData) ->
-    NodeName = maps:get(<<"node">>, Args, node()),
+do_call_tool(<<"get_logs_by_time">>, Args, LoopData) ->
+    NodeName = get_required(<<"node_name">>, Args),
     LogLevel = maps:get(<<"level">>, Args, <<"debug">>),
-    MaxMsgs = maps:get(<<"max_messages">>, Args, 100),
-    StartTime = maps:get(<<"start_time">>, Args, <<"now-10m">>),
-    EndTime = maps:get(<<"end_time">>, Args, <<"now">>),
+    MaxMsgs = maps:get(<<"max_num_logs">>, Args, 200),
+    StartTime = get_required(<<"start_time">>, Args),
+    EndTime = get_required(<<"end_time">>, Args),
     rpc_call(
         NodeName,
         emqx_mcp_tools_common,
-        get_log_messages,
+        get_logs_by_time,
         [LogLevel, MaxMsgs, StartTime, EndTime],
-        5000,
+        15_000,
+        LoopData
+    );
+do_call_tool(<<"get_last_n_logs">>, Args, LoopData) ->
+    NodeName = get_required(<<"node_name">>, Args),
+    LogLevel = maps:get(<<"level">>, Args, <<"debug">>),
+    MaxMsgs = maps:get(<<"max_num_logs">>, Args, 200),
+    rpc_call(
+        NodeName,
+        emqx_mcp_tools_common,
+        get_last_n_logs,
+        [LogLevel, MaxMsgs],
+        15_000,
         LoopData
     );
 do_call_tool(Name, Args, _LoopData) ->
@@ -228,6 +240,14 @@ handle_http_api_result({204}, LoopData) ->
     {ok, #{}, LoopData};
 handle_http_api_result({Code, #{message := Msg}}, _LoopData) ->
     {error, #{code => Code, message => Msg}}.
+
+get_required(Key, Args) ->
+    case maps:get(Key, Args, undefined) of
+        undefined ->
+            throw({required_field_missing, Key});
+        Value ->
+            Value
+    end.
 
 -dialyzer({no_unknown, [rpc_multicall/5]}).
 rpc_multicall(Module, Function, Args, Timeout, LoopData) ->

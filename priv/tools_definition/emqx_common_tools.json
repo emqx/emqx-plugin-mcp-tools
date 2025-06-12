@@ -6,8 +6,8 @@
             "properties": {}
         }
     },
-    "get_log_messages": {
-        "description": "Get log messages from a specific emqx node. This tool retrieves log messages based on the specified minimum log level ('level'), time range ('start_time' and 'end_time'), and the maximum number of log messages to return in a single query (max_messages). The 'start_time' and 'end_time' fields are in RFC3339 format. If the start_time is later than the end_time, the tool will search the logs backwards from the end_time until reaching the start_time, and the returned list of logs will be arranged in reverse chronological order. The tool returns an object containing the 'node_name' and an array of log messages that are more severe than or equal to the specified 'level', each represented as a text string or a JSON string. It will return maximum 'max_messages' number of messages, if you want to retrieve more messages, you can call this tool again by setting 'start_time' to the timestamp of the last message returned in the previous call.",
+    "get_logs_by_time": {
+        "description": "Get logs from a specific emqx node based on a time period. This tool gets log messages based on the specified minimum log level ('level'), time range ('start_time' and 'end_time'), and the maximum number of log messages to return in a single query (max_num_logs). The 'start_time' and 'end_time' fields are in RFC3339 format. If the start_time is later than the end_time, the tool will search the logs backwards from the end_time until reaching the start_time, and the returned list of logs will be arranged in reverse chronological order. The tool returns an object containing the 'node_name' and an array of log messages that are more severe than or equal to the specified 'level', each represented as a text string or a JSON string. It will return maximum 'max_num_logs' number of messages, if you want to retrieve more messages, you can call this tool again by setting 'start_time' to the timestamp of the last message returned in the previous call.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -26,16 +26,44 @@
                 "start_time": {
                     "type": "string",
                     "format": "date-time",
-                    "description": "The start time in RFC3339 format to filter log messages. If not specified, it defaults to the current time minus 10 mins. You can also use relative time formats from 'now'. e.g. 'now' means the current time, 'now-1h' means one hour ago, 'now+30m' means 30 minutes in the future. Supported time units are: 's' (seconds), 'm' (minutes), 'h' (hours), 'd' (days), 'w' (weeks).",
-                    "default": "now-10m"
+                    "description": "The start time in RFC3339 format to filter log messages. You can also use relative time formats from 'now'. e.g. 'now' means the current time, 'now-1h' means one hour ago, 'now+30m' means 30 minutes in the future. Supported time units are: 's' (seconds), 'm' (minutes), 'h' (hours), 'd' (days), 'w' (weeks)."
                 },
                 "end_time": {
                     "type": "string",
                     "format": "date-time",
-                    "description": "The end time in RFC3339 format to filter log messages. If not specified, it defaults to the current time. You can also use relative time formats like 'now' or 'now+1h'. See the 'start_time' field for supported time units.",
-                    "default": "now"
+                    "description": "The end time in RFC3339 format to filter log messages. You can also use relative time formats like 'now' or 'now+1h'. See the 'start_time' field for supported time units."
                 },
-                "max_messages": {
+                "max_num_logs": {
+                    "type": "integer",
+                    "description": "The maximum number of log messages to return in a single query. If not specified, the default is 200. The maximum allowed value is 1000, and the minimum is 1.",
+                    "default": 200,
+                    "maximum": 1000,
+                    "minimum": 1
+                }
+            },
+            "required": [
+                "node_name", "start_time", "end_time"
+            ]
+        }
+    },
+    "get_last_n_logs": {
+        "description": "Get the last N log messages from a specific emqx node. This tool retrieves the most recent log messages based on the specified minimum log level ('level') and the maximum number of log messages to return ('max_num_logs'). The tool returns an object containing the 'node_name' and an array of log messages that are more severe than or equal to the specified 'level', each represented as a text string or a JSON string. It will only return last 'max_num_logs' messages in reverse chronological order, if you want to retrieve more messages, you can call another tool 'get_logs_by_time' with the 'start_time' set to the timestamp of the last message returned by this tool.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "node_name": {
+                    "type": "string",
+                    "description": "The name of the emqx node to query for log messages. e.g. 'emqx@192.168.1.2'. You can get the list of emqx nodes by calling the 'get_emqx_cluster_info' tool."
+                },
+                "level": {
+                    "type": "string",
+                    "description": "The minimum severity level of log messages to retrieve. Valid values are 'debug', 'info', 'notice', 'warning', 'error', 'critical', 'alert', and 'emergency'.",
+                    "enum": [
+                        "debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"
+                    ],
+                    "default": "debug"
+                },
+                "max_num_logs": {
                     "type": "integer",
                     "description": "The maximum number of log messages to return in a single query. If not specified, the default is 200. The maximum allowed value is 1000, and the minimum is 1.",
                     "default": 200,
