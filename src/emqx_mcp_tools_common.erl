@@ -60,7 +60,11 @@ get_last_n_logs(LogLevel0, MaxMsgs0) ->
     LogFiles = get_log_files(),
     %% sort the log files by modification time
     SortedFiles = lists:sort(
-        fun (#{mtime := Mtime1, file := F1, log_type := LogT1}, #{mtime := Mtime1, file := F2, log_type := LogT2}) ->
+        fun
+            (
+                #{mtime := Mtime1, file := F1, log_type := LogT1},
+                #{mtime := Mtime1, file := F2, log_type := LogT2}
+            ) ->
                 %% modification time is the same, sort by timestamp of the first log msg
                 case {read_first_valid_line(F1, LogT1), read_first_valid_line(F2, LogT2)} of
                     {no_valid_log_line, no_valid_log_line} ->
@@ -109,8 +113,7 @@ do_read_first_valid_line(Fd, LogType) ->
 open_log_file(File) ->
     case file:open(File, [read, binary, raw, {read_ahead, ?READ_AHEAD}]) of
         {ok, Fd} -> Fd;
-        {error, Reason} ->
-            throw({open_log_file_failed, #{file => File, reason => Reason}})
+        {error, Reason} -> throw({open_log_file_failed, #{file => File, reason => Reason}})
     end.
 
 read_logs_from_files(
@@ -245,15 +248,21 @@ read_latest_logs([#{file := File, log_type := LogType, size := Size} | Files], L
         file:close(Fd)
     end.
 
-read_first_file_from_eof(MaxMsgs, Fd, LogType, LogLevel, SizeRem, OffSet, LastBytes, LinesAcc, NumLines) ->
+read_first_file_from_eof(
+    MaxMsgs, Fd, LogType, LogLevel, SizeRem, OffSet, LastBytes, LinesAcc, NumLines
+) ->
     case SizeRem =< ?BYTES of
         true ->
-            {Lines, Count} = read_lines_from_eof(Fd, LogType, LogLevel, SizeRem, SizeRem, LastBytes),
+            {Lines, Count} = read_lines_from_eof(
+                Fd, LogType, LogLevel, SizeRem, SizeRem, LastBytes
+            ),
             NumLinesNow = NumLines + Count,
             LinesGotNow = LinesAcc ++ lists:reverse(Lines),
             {ok, LinesGotNow, NumLinesNow};
         false ->
-            {RemBytes, Lines, Count} = read_lines_from_eof_but_first(Fd, LogType, LogLevel, OffSet, ?BYTES, LastBytes),
+            {RemBytes, Lines, Count} = read_lines_from_eof_but_first(
+                Fd, LogType, LogLevel, OffSet, ?BYTES, LastBytes
+            ),
             NumLinesNow = NumLines + Count,
             LinesGotNow = LinesAcc ++ lists:reverse(Lines),
             case NumLinesNow >= MaxMsgs of
@@ -262,7 +271,10 @@ read_first_file_from_eof(MaxMsgs, Fd, LogType, LogLevel, SizeRem, OffSet, LastBy
                 false ->
                     %% read more bytes from the end of the file
                     read_first_file_from_eof(
-                        MaxMsgs, Fd, LogType, LogLevel,
+                        MaxMsgs,
+                        Fd,
+                        LogType,
+                        LogLevel,
                         SizeRem - ?BYTES,
                         OffSet + ?BYTES,
                         RemBytes,
@@ -289,17 +301,20 @@ read_lines_from_eof_but_first(Fd, LogType, LogLevel, OffSet, ReadBytes, LastByte
     {RemBytes, Lines, length(Lines)}.
 
 parse_valid_lines(Lines, LogType, LogLevel) ->
-    lists:filtermap(fun(Line) ->
-        case parse_line(Line, LogType) of
-            {ok, #{level := LogLevel1, message := LogMsg}} ->
-                case logger:compare_levels(LogLevel1, LogLevel) of
-                    lt -> false;
-                    _ -> {true, LogMsg}
-                end;
-            {error, _} ->
-                false
-        end
-    end, Lines).
+    lists:filtermap(
+        fun(Line) ->
+            case parse_line(Line, LogType) of
+                {ok, #{level := LogLevel1, message := LogMsg}} ->
+                    case logger:compare_levels(LogLevel1, LogLevel) of
+                        lt -> false;
+                        _ -> {true, LogMsg}
+                    end;
+                {error, _} ->
+                    false
+            end
+        end,
+        Lines
+    ).
 
 do_read_latest_logs([], _LogLevel, _MaxMsgs, Acc) ->
     Acc;
