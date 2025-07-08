@@ -19,6 +19,10 @@
             "type": "object"
         }
     },
+    "list_connectors": {
+        "description": "Get a list of all connectors configured in EMQX. Each connector has a Connector ID (as the 'id' field) in format of {type}:{name}. Each connector can be either enabled or disabled, indicated by the 'enable' field. The response also includes connector type, name, status and other configuration details.",
+        "inputSchema": {}
+    },
     "list_authenticators": {
         "description": "Get a list of authenticators configured in EMQX. Each has an Authenticator ID (as the 'id' field) in format of {mechanism}:{backend}. Each authenticator can be either enabled or disabled, indicated by the 'enable' field.",
         "inputSchema": {}

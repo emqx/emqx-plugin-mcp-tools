@@ -134,6 +134,9 @@ do_call_tool(<<"emqx_connector_info">>, Args, LoopData) ->
     ConnectorId = get_required(<<"id">>, Args),
     Result = emqx_connector_api:'/connectors/:id'(get, #{bindings => #{id => ConnectorId}}),
     handle_http_api_result(Result, LoopData);
+do_call_tool(<<"list_connectors">>, _Args, LoopData) ->
+    Result = emqx_connector_api:'/connectors'(get, #{}),
+    handle_http_api_result(Result, LoopData);
 do_call_tool(<<"list_authenticators">>, _Args, LoopData) ->
     Result = emqx_authn_api:authenticators(get, #{}),
     handle_http_api_result(Result, LoopData);
